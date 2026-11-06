@@ -312,8 +312,11 @@ function loadVoices() { try { voices = window.speechSynthesis.getVoices() || [];
 loadVoices();
 if ('speechSynthesis' in window) window.speechSynthesis.onvoiceschanged = loadVoices;
 
-function speak(text, rate) {
-  if (!('speechSynthesis' in window)) return;
+function speak(text, rate, onend) {
+  if (!('speechSynthesis' in window)) {
+    if (typeof onend === 'function') setTimeout(onend, 300);   // 没有语音也要让后续动作接上
+    return;
+  }
   try {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
@@ -321,8 +324,11 @@ function speak(text, rate) {
     u.rate = rate || 0.8;
     const v = voices.find((v) => /en[-_]US/i.test(v.lang)) || voices.find((v) => /^en/i.test(v.lang));
     if (v) u.voice = v;
+    if (typeof onend === 'function') u.onend = onend;
     window.speechSynthesis.speak(u);
-  } catch (e) { /* 忽略 */ }
+  } catch (e) {
+    if (typeof onend === 'function') setTimeout(onend, 300);
+  }
 }
 
 let toastTimer = null;
@@ -396,6 +402,7 @@ function phraseBoardHTML(i, sp, hint) {
       <div class="board__paper">
         <span class="board__lv">L${w.lv}</span>
         <p class="panel__hint" style="text-align:center;margin:0 0 2px">${hint || '选出正确的英文'}</p>
+        ${picHTML(w, true)}
         <div class="quiz__q">${esc(w.cn)}</div>
         <div class="board__ipa">${meta}${meta ? ' · ' : ''}${shape}</div>
         <button class="btn btn--sound" data-act="say" data-w="${i}">${ICONS.speak} 听发音</button>
@@ -419,6 +426,7 @@ const ui = {
   game: null,       // 闯关会话
   quiz: null,       // 单题选择状态
   spell: null,      // 拼字状态
+  meaning: null,    // 三选一（看英文选中文）状态
   sheet: null,      // 弹层
   parentOK: false   // 家长验证状态（本次会话有效）
 };
@@ -717,7 +725,10 @@ function startLearn() {
   const left = Math.max(0, db.cfg.perDay - todayDone(p).newN);
   const list = newWords(p, left);
   if (!list.length) { toast('今天的新词已经学完啦'); return; }
+  /* 每个新词走四步：看图 → 拼读（含跟读录音）→ 选意思 → 拼写 */
   ui.learn = { list: list, pos: 0, phase: 'show', results: { ok: 0, bad: 0 } };
+  resetRec();
+  clearLit();
   prepSpell(list[0], 'learn');
   go('learn');
 }
@@ -748,11 +759,254 @@ function prepSpell(i, ctx) {
     ui.spell = Object.assign(base, { type: 'pick', opts: phraseOpts(i), tried: [], missed: false });
     return;
   }
-  ui.spell = Object.assign(base, {
-    type: 'letter',
-    pool: shuffle(w.w.split('').map((ch, k) => ({ ch: ch, id: k }))),
-    filled: new Array(w.w.length).fill(null)
+  /* 拼写＝把打散的字母块拼回去。长词先送首字母，避免一上手就卡死；
+     复习和闯关不给这个提示，那两处要的是真回忆。 */
+  const letters = w.w.split('');
+  const pool = shuffle(letters.map((ch, k) => ({ ch: ch, id: k })));
+  const filled = new Array(w.w.length).fill(null);
+  let hint = 0;
+  const giveHint = ctx !== 'review' && ctx !== 'game' && w.w.length >= 6;
+  if (giveHint) {
+    const first = pool.find((x) => x.ch === letters[0]);
+    if (first) { filled[0] = first.id; hint = 1; }
+  }
+  ui.spell = Object.assign(base, { type: 'letter', pool: pool, filled: filled, hint: hint });
+}
+
+/* ---------- 三选一：看英文选中文 ---------- */
+/* 干扰项先取同单元（难度接近才有区分度），不够用再用同册其他单元补，
+   中文释义必须互不相同，否则会出现两个一样的意思。 */
+function meaningOpts(i) {
+  const w = WORDS[i];
+  const others = bookList(P()).filter((x) => x !== i && WORDS[x] && WORDS[x].cn !== w.cn);
+  const near = shuffle(others.filter((x) => WORDS[x].unit === w.unit && WORDS[x].book === w.book));
+  const far = shuffle(others.filter((x) => !(WORDS[x].unit === w.unit && WORDS[x].book === w.book)));
+  const out = [w.cn];
+  near.concat(far).forEach((x) => {
+    if (out.length >= 3) return;
+    const cn = WORDS[x].cn;
+    if (out.indexOf(cn) === -1) out.push(cn);
   });
+  return shuffle(out);
+}
+
+function prepMeaning(i) {
+  ui.meaning = { wi: i, opts: meaningOpts(i), tried: [], missed: false, ok: false };
+}
+
+/* ---------- 拼读：慢速朗读 + 字母跟着读音逐个亮 ---------- */
+/* 关键：念的是词的**读音**，不是字母名。
+   早期版本把词拆成字母块逐块念，合成器读出来的是 "dee-oh-see-tee-oh-ar"，
+   那不是拼读、读音也全错。现在改成整词慢速朗读，靠 onboundary 事件拿到
+   "现在读到第几个字符"，再把高亮挪过去 —— 听到哪个字母就亮哪个字母。
+   浏览器不给 boundary 事件时（部分 Safari），退回按字母数估算时长匀速推进。 */
+let litTimers = [];
+function clearLit() {
+  litTimers.forEach(clearTimeout);
+  litTimers = [];
+  const el = document.querySelectorAll('.board__word .seg.is-lit, .board__word .ch.is-lit');
+  for (let k = 0; k < el.length; k++) el[k].classList.remove('is-lit');
+}
+function litSegs(n) {
+  const els = document.querySelectorAll('.board__word .seg, .board__word .ch');
+  for (let k = 0; k < els.length; k++) els[k].classList.toggle('is-lit', k < n);
+}
+function letterCount(w) { return w.w.replace(/[^a-zA-Z]/g, '').length; }
+
+/* 拼读阶段用：每个字母一个格子，才能一个字母一个字母地点亮。
+   颜色仍然按所属拼读块给（or / sh 这类组合保持同色）。 */
+function charHTML(w) {
+  const letters = w.w.replace(/[^a-zA-Z]/g, '');
+  let k = 0;
+  let out = '';
+  w.seg.forEach(function (s) {
+    const chunk = letters.substr(k, s[0].length);
+    for (let c = 0; c < chunk.length; c++) {
+      out += '<span class="ch k-' + s[1] + '" data-act="seg" data-w="' + w.i + '">' + esc(chunk[c]) + '</span>';
+    }
+    k += s[0].length;
+  });
+  return out;
+}
+
+let readTimer = null;
+function readSlow(i) {
+  const w = WORDS[i];
+  clearLit();
+  if (readTimer) { clearTimeout(readTimer); readTimer = null; }
+
+  const N = letterCount(w);
+  if (!('speechSynthesis' in window)) { litSegs(N); return; }
+
+  const RATE = 0.45;                       // 慢，但要听得出词
+  let gotBoundary = false;
+  let estTimer = null;
+  const stopEst = function () { if (estTimer) { clearInterval(estTimer); estTimer = null; } };
+
+  try {
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(w.w);
+    u.lang = 'en-US';
+    u.rate = RATE;
+    const v = voices.find(function (x) { return /en[-_]US/i.test(x.lang); })
+      || voices.find(function (x) { return /^en/i.test(x.lang); });
+    if (v) u.voice = v;
+    u.onboundary = function (e) {
+      gotBoundary = true;
+      stopEst();
+      const ci = typeof e.charIndex === 'number' ? e.charIndex : 0;
+      litSegs(Math.min(N, ci + 1));
+    };
+    u.onend = function () {
+      stopEst();
+      litSegs(N);
+      litTimers.push(setTimeout(function () { litSegs(0); }, 480));
+    };
+    window.speechSynthesis.speak(u);
+  } catch (e) { /* 念不出来就只亮 */ }
+
+  /* 拿不到 boundary 的浏览器：按慢速朗读的大致时长匀速推进 */
+  readTimer = setTimeout(function () {
+    if (gotBoundary) return;
+    const total = Math.max(1200, N * 210);
+    const step = total / Math.max(1, N);
+    let k = 0;
+    estTimer = setInterval(function () {
+      k++;
+      litSegs(Math.min(N, k));
+      if (k >= N) {
+        stopEst();
+        litTimers.push(setTimeout(function () { litSegs(0); }, 700));   // 读完回位
+      }
+    }, step);
+  }, 380);
+}
+
+function readFull(i) {
+  const w = WORDS[i];
+  clearLit();
+  litSegs(letterCount(w));
+  speak(w.w, 0.9);
+  litTimers.push(setTimeout(function () { litSegs(0); }, 1600));
+}
+
+/* ---------- 跟读录音 ---------- */
+/* 只做「录下来和原音对比」：不给孩子打发音分数——本地没有可靠的发音评测，
+   硬编一个分数出来会误导他以为自己读对了。听感对比交给耳朵。 */
+const rec = { state: 'idle', mr: null, stream: null, url: '', sec: 0, timer: null };
+
+function recSupported() {
+  return !!(window.MediaRecorder && navigator.mediaDevices && navigator.mediaDevices.getUserMedia
+    && location.protocol !== 'file:');
+}
+function recMime() {
+  if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return '';
+  const list = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'];
+  for (let k = 0; k < list.length; k++) { if (MediaRecorder.isTypeSupported(list[k])) return list[k]; }
+  return '';
+}
+function resetRec() {
+  clearInterval(rec.timer);
+  rec.timer = null;
+  if (rec.mr) { try { if (rec.mr.state !== 'inactive') rec.mr.stop(); } catch (e) { /* 忽略 */ } }
+  if (rec.stream) { try { rec.stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* 忽略 */ } }
+  if (rec.url) { try { URL.revokeObjectURL(rec.url); } catch (e) { /* 忽略 */ } }
+  rec.state = 'idle'; rec.mr = null; rec.stream = null; rec.url = ''; rec.sec = 0;
+}
+function recStart() {
+  if (!recSupported()) { toast('这个打开方式录不了音，用浏览器打开线上版就行'); return; }
+  resetRec();
+  navigator.mediaDevices.getUserMedia({ audio: true }).then(function (stream) {
+    let mr;
+    try {
+      const mime = recMime();
+      mr = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+    } catch (e) {
+      try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e2) { /* 忽略 */ }
+      toast('这台设备录不了音');
+      return;
+    }
+    const chunks = [];
+    mr.ondataavailable = function (e) { if (e.data && e.data.size) chunks.push(e.data); };
+    mr.onstop = function () {
+      const blob = new Blob(chunks, { type: mr.mimeType || 'audio/webm' });
+      if (rec.url) { try { URL.revokeObjectURL(rec.url); } catch (e) { /* 忽略 */ } }
+      rec.url = URL.createObjectURL(blob);
+      rec.state = 'ready';
+      try { stream.getTracks().forEach(function (t) { t.stop(); }); } catch (e) { /* 忽略 */ }
+      render();
+    };
+    rec.mr = mr; rec.stream = stream; rec.state = 'rec'; rec.sec = 0;
+    mr.start();
+    rec.timer = setInterval(function () {
+      rec.sec++;
+      if (rec.sec >= 10) { recStop(); return; }
+      const el = $('#recSec');
+      if (el) el.textContent = rec.sec + '″';
+    }, 1000);
+    render();
+  }).catch(function () {
+    toast('没拿到麦克风权限，在浏览器设置里允许一下');
+    rec.state = 'idle';
+    render();
+  });
+}
+function recStop() {
+  clearInterval(rec.timer);
+  rec.timer = null;
+  if (rec.mr && rec.mr.state !== 'inactive') { try { rec.mr.stop(); } catch (e) { /* 忽略 */ } }
+}
+function recPlay() {
+  if (!rec.url) return;
+  try { new Audio(rec.url).play(); } catch (e) { /* 忽略 */ }
+}
+/* 先放原音，等它念完再放孩子的录音，两个声音挨着才好比 */
+function recCompare() {
+  const s = ui.learn;
+  if (!s || s.pos >= s.list.length) return;
+  speak(WORDS[s.list[s.pos]].w, 0.85, function () { setTimeout(recPlay, 320); });
+}
+
+/* 四步指示器：让孩子知道现在走到哪一步 */
+const LEARN_STEPS = [['show', '看图'], ['read', '拼读'], ['meaning', '选意思'], ['spell', '拼写']];
+function stepsHTML(phase) {
+  let at = 0;
+  LEARN_STEPS.forEach(function (x, k) { if (x[0] === phase) at = k; });
+  return '<div class="steps">' + LEARN_STEPS.map(function (x, k) {
+    return '<span class="' + (k === at ? 'is-on' : (k < at ? 'is-done' : '')) + '">' + x[1] + '</span>';
+  }).join('<i></i>') + '</div>';
+}
+
+/* 释义配图：一个字一个 emoji，不占体积、离线也能显示 */
+function picHTML(w, small) {
+  const e = w.em || '🌱';
+  return '<div class="pic' + (small ? ' pic--sm' : '') + '" aria-hidden="true">' + esc(e) + '</div>';
+}
+
+function recHTML(w) {
+  if (!recSupported()) {
+    return '<div class="recbox recbox--off">这台设备（或现在这个打开方式）录不了音，跟着读三遍效果一样</div>';
+  }
+  if (rec.state === 'rec') {
+    return '<div class="recbox">' +
+      '<div class="reclive"><i class="reclive__dot"></i>正在录音 <b id="recSec">' + rec.sec + '″</b></div>' +
+      '<button class="btn btn--block btn--danger" data-act="recStop">⏹ 读完了</button>' +
+      '</div>';
+  }
+  if (rec.state === 'ready') {
+    return '<div class="recbox">' +
+      '<div class="recbox__row">' +
+        '<button class="btn btn--sm" data-act="say" data-w="' + w.i + '">' + ICONS.speak + ' 原音</button>' +
+        '<button class="btn btn--sm btn--primary" data-act="recPlay">🎧 我的录音</button>' +
+      '</div>' +
+      '<button class="btn btn--block btn--sm" data-act="recCompare">🔁 先听原音，再听我的</button>' +
+      '<button class="btn btn--block btn--sm btn--ghost" data-act="recStart">🔄 再录一次</button>' +
+      '</div>';
+  }
+  return '<div class="recbox">' +
+    '<div class="recbox__tip">点一下开始，大声读一遍，再听听自己像不像</div>' +
+    '<button class="btn btn--block btn--primary" data-act="recStart">🎙 录下我的跟读</button>' +
+    '</div>';
 }
 
 function viewLearn() {
@@ -764,36 +1018,98 @@ function viewLearn() {
   const w = WORDS[i];
   const total = s.list.length;
 
+  /* 进度条按四步细分，孩子看着走得更顺 */
+  const phaseAt = { show: 0, read: 1, meaning: 2, spell: 3 }[s.phase] || 0;
+  const frac = s.mode === 'review' ? (s.pos / total) : ((s.pos + phaseAt / 4) / total);
+
   const head = `
   ${topbar('种新词', `第 ${s.pos + 1} / ${total} 个`, true)}
   <main class="page">
     <div class="learn">
       <div class="fieldbar">
         <span>${spr(TILE.carrot, 16)}</span>
-        <span class="progressline"><i style="width:${Math.round((s.pos / total) * 100)}%"></i></span>
+        <span class="progressline"><i style="width:${Math.round(frac * 100)}%"></i></span>
         <b>剩 ${total - s.pos} 个</b>
       </div>
       ${batchBar(s, TILE.carrot)}`;
+
+  const wordHTML = isPhrase(w)
+    ? `<div class="board__word board__word--phr">${esc(w.w)}</div>`
+    : `<div class="board__word" style="font-size:${wordSize(w.w)}px">${segHTML(w)}</div>`;
 
   if (s.phase === 'show') {
     return head + `
       <div class="board">
         <div class="board__paper">
           <span class="board__lv">L${w.lv}</span>
+          ${picHTML(w)}
           <div class="board__cn">${esc(w.cn)}</div>
-          ${isPhrase(w)
-            ? `<div class="board__word board__word--phr">${esc(w.w)}</div>`
-            : `<div class="board__word" style="font-size:${wordSize(w.w)}px">${segHTML(w)}</div>`}
+          ${wordHTML}
           <div class="board__ipa">${esc(w.p)}</div>
           <button class="btn btn--sound" data-act="say" data-w="${i}">${ICONS.speak} 听发音</button>
         </div>
       </div>
       ${isPhrase(w)
-        ? '<div class="legend legend--phr">词组按整句读，不拆字母，一会儿选一选</div>'
+        ? '<div class="legend legend--phr">词组按整句读，不拆字母</div>'
         : `<div class="legend">
         ${SEG_LEGEND.map((seg) => `<span class="${seg[0]}">■ ${seg[1]}</span>`).join('')}
       </div>`}
-      <button class="btn btn--primary btn--block btn--big" data-act="toSpell">${isPhrase(w) ? '记住了，来选一选' : '记住了，来拼一拼'}</button>
+      ${s.mode === 'review' ? '' : stepsHTML(s.phase)}
+      <button class="btn btn--primary btn--block btn--big" data-act="${s.mode === 'review' ? 'toSpell' : 'toRead'}">${s.mode === 'review' ? (isPhrase(w) ? '记住了，来选一选' : '记住了，来拼一拼') : '看图记住了，来拼读'}</button>
+    </div>
+    ${farmFoot()}
+  </main>`;
+  }
+
+  /* 第二步：拼读（慢速朗读，字母跟着读音亮）+ 跟读录音 */
+  if (s.phase === 'read') {
+    const readWord = isPhrase(w)
+      ? `<div class="board__word board__word--phr">${esc(w.w)}</div>`
+      : `<div class="board__word" style="font-size:${wordSize(w.w)}px">${charHTML(w)}</div>`;
+    return head + `
+      <div class="board">
+        <div class="board__paper">
+          <span class="board__lv">L${w.lv}</span>
+          ${picHTML(w, true)}
+          ${readWord}
+          <div class="board__ipa">${esc(w.p)}</div>
+        </div>
+      </div>
+      <div class="readbar">
+        <button class="btn btn--read" data-act="readSlow" data-w="${i}">🐢 拼读</button>
+        <button class="btn btn--read" data-act="readFull" data-w="${i}">⚡ 完整拼读</button>
+      </div>
+      <div class="readhint">${isPhrase(w) ? '先慢慢读一遍，再整句连起来读' : '慢慢读这个词，读到哪个字母就亮哪个字母'}</div>
+      ${recHTML(w)}
+      ${stepsHTML(s.phase)}
+      <button class="btn btn--primary btn--block btn--big" data-act="toMeaning">读熟了，去选意思</button>
+    </div>
+    ${farmFoot()}
+  </main>`;
+  }
+
+  /* 第三步：看英文选中文（这里不能给配图，图就是答案） */
+  if (s.phase === 'meaning') {
+    const m = ui.meaning || {};
+    const opts = m.opts || [];
+    return head + `
+      <div class="board">
+        <div class="board__paper">
+          ${wordHTML}
+          <div class="board__ipa">${esc(w.p)}</div>
+          <button class="btn btn--sound" data-act="say" data-w="${i}">${ICONS.speak} 听发音</button>
+        </div>
+      </div>
+      <div class="ask">这个词是什么意思？</div>
+      <div class="meaningopts">
+        ${opts.map((cn) => {
+          const dead = (m.tried || []).indexOf(cn) !== -1;
+          const win = m.ok && cn === w.cn;
+          return `<button class="mopt ${dead ? 'is-dead' : ''} ${win ? 'is-ok' : ''}" data-act="meaningPick" data-o="${esc(cn)}"${dead ? ' disabled' : ''}>${esc(cn)}</button>`;
+        }).join('')}
+      </div>
+      <div class="feedback" id="fb">${m.ok ? '✓ 选对了！' : ((m.tried || []).length ? '再想想，划掉的都不对' : '从三个意思里挑一个')}</div>
+      ${stepsHTML(s.phase)}
     </div>
     ${farmFoot()}
   </main>`;
@@ -813,7 +1129,8 @@ function viewLearn() {
   // 拼写阶段：英文隐藏
   const slots = sp.filled.map((f, idx) => {
     const ch = f === null ? '' : sp.pool.find((x) => x.id === f).ch;
-    return `<div class="slot ${f === null ? 'slot--empty' : ''}" data-act="slot" data-i="${idx}">${esc(ch || '·')}</div>`;
+    const hintCls = (sp.hint && idx < sp.hint) ? ' slot--hint' : '';
+    return `<div class="slot ${f === null ? 'slot--empty' : ''}${hintCls}" data-act="slot" data-i="${idx}">${esc(ch || '·')}</div>`;
   }).join('');
   const letters = sp.pool.map((x) => `
     <button class="letter ${sp.filled.includes(x.id) ? 'is-used' : ''}" data-act="letter" data-id="${x.id}">${esc(x.ch)}</button>`).join('');
@@ -822,6 +1139,7 @@ function viewLearn() {
       <div class="board">
         <div class="board__paper">
           <span class="board__lv">L${w.lv}</span>
+          ${picHTML(w, true)}
           <div class="board__cn">${esc(w.cn)}</div>
           <div class="board__ipa">${esc(w.p)} · ${w.w.length} 个字母</div>
           <button class="btn btn--sound" data-act="say" data-w="${i}">${ICONS.speak} 听发音</button>
@@ -831,7 +1149,7 @@ function viewLearn() {
         <div class="slots ${sp.bad ? 'is-bad' : ''} ${sp.ok ? 'is-ok' : ''}" id="slots">${slots}</div>
       </div>
       <div class="pool" id="pool">${letters}</div>
-      <div class="feedback" id="fb">${sp.ok ? '拼对了！' : (sp.bad ? '再试一次，加油' : '按顺序点字母，把这个词拼出来')}</div>
+      <div class="feedback" id="fb">${sp.ok ? '拼对了！' : (sp.bad ? '再试一次，加油' : (sp.hint ? '首字母已经放好了，把剩下的字母按顺序点进去' : '按顺序点字母，把这个词拼出来'))}</div>
       <button class="btn btn--ghost btn--block btn--sm" data-act="forget">想不起来，先看看答案</button>
     </div>
     ${farmFoot()}
@@ -917,6 +1235,7 @@ function viewReview() {
       <div class="board">
         <div class="board__paper">
           <span class="board__lv">L${w.lv}</span>
+          ${picHTML(w, true)}
           <div class="board__cn">${esc(w.cn)}</div>
           <div class="board__ipa">${esc(w.p)} · ${w.w.length} 个字母</div>
           <button class="btn btn--sound" data-act="say" data-w="${i}">${ICONS.speak} 听发音</button>
@@ -1783,10 +2102,16 @@ function onSpellOK(sp) {
   s.pos++;
   if (s.pos < s.list.length) {
     prepSpell(s.list[s.pos], s.mode === 'review' ? 'review' : 'learn');
-    if (s.mode !== 'review') s.phase = 'show';
+    if (s.mode !== 'review') {
+      s.phase = 'show';
+      resetRec();
+      clearLit();
+    }
     render();
     if (s.mode !== 'review') speak(WORDS[s.list[s.pos]].w);
   } else {
+    resetRec();
+    clearLit();
     confetti();
     render();
   }
@@ -1851,6 +2176,61 @@ document.addEventListener('click', (e) => {
     }
 
     /* 学习流程 */
+    case 'toRead':
+      if (!ui.learn) break;
+      ui.learn.phase = 'read';
+      resetRec();
+      render();
+      readSlow(ui.spell.wi);          // 进这一步先自己读一遍给孩子听
+      break;
+
+    case 'readSlow': readSlow(Number(t.dataset.w)); break;
+    case 'readFull': readFull(Number(t.dataset.w)); break;
+
+    case 'toMeaning':
+      if (!ui.learn) break;
+      ui.learn.phase = 'meaning';
+      prepMeaning(ui.spell.wi);
+      render();
+      speak(WORDS[ui.spell.wi].w);
+      break;
+
+    /* 三选一：点错只划掉那一个，可以继续选，直到选对 */
+    case 'meaningPick': {
+      const m = ui.meaning;
+      if (!m || m.ok) return;
+      const w = WORDS[m.wi];
+      const cn = t.dataset.o;
+      if (m.tried.indexOf(cn) !== -1) return;
+
+      if (cn === w.cn) {
+        m.ok = true;
+        render();
+        const fb = $('#fb');
+        if (fb) { fb.textContent = '✓ 就是「' + w.cn + '」'; fb.className = 'feedback feedback--ok'; }
+        setTimeout(function () {
+          if (ui.meaning !== m || !ui.learn) return;      // 已经换题或走了
+          ui.learn.phase = 'spell';
+          prepSpell(m.wi, 'learn');
+          render();
+        }, 850);
+        return;
+      }
+
+      m.tried.push(cn);
+      if (!m.missed) { m.missed = true; gradeWord(m.wi, false); }   // 同一题只记一次错
+      render();
+      const fb = $('#fb');
+      if (fb) { fb.textContent = '不对，「' + cn + '」不是这个词'; fb.className = 'feedback feedback--bad'; }
+      break;
+    }
+
+    /* 跟读录音 */
+    case 'recStart': recStart(); break;
+    case 'recStop': recStop(); break;
+    case 'recPlay': recPlay(); break;
+    case 'recCompare': recCompare(); break;
+
     case 'toSpell':
       ui.learn.phase = 'spell';
       prepSpell(ui.spell.wi, 'learn');   // 重新出这道题：洗选项、清掉划掉的、清空字母格
@@ -1859,6 +2239,8 @@ document.addEventListener('click', (e) => {
 
     case 'forget': {
       ui.learn.phase = 'show';
+      resetRec();
+      clearLit();
       render();
       break;
     }

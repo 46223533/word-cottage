@@ -1,7 +1,7 @@
-/* 由 tools/build-sw.js 生成，勿手改。版本：v5
+/* 由 tools/build-sw.js 生成，勿手改。版本：v6
  * 策略：应用外壳 cache-first（离线可用），同时在后台静默更新；
  *       导航请求 network-first，断网时回落到缓存的 index.html。 */
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = 'wordfun-' + VERSION;
 
 const PRECACHE = [

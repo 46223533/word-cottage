@@ -1349,7 +1349,16 @@ ul { margin: 0; padding: 0; list-style: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.unitstrip__chips { display: flex; flex-wrap: wrap; gap: 3px; max-width: 96px; justify-content: flex-end; }
+/* 不能被 flex 压成 0 宽——单元多的时候宁可让左边的说明文字打省略号 */
+.unitstrip__chips {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  max-width: 84px;
+  justify-content: flex-end;
+  overflow: hidden;
+}
 .unitchip {
   padding: 1px 5px;
   background: var(--grass-l);

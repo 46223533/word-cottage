@@ -1,0 +1,1440 @@
+/* ==========================================================================
+   单词小屋 · 农场学习乐园
+   --------------------------------------------------------------------------
+   视觉语言全部来自 Kenney「Tiny Farm」素材包（assets/tinyfarm，CC0）：
+     · 结构面：图块派生的无缝材质（草地 / 木纹 / 泥土垄，见 tools/make-textures.py）
+     · 装饰面：图块精灵（树、作物、家禽、木箱、工具、人物）
+     · 排版面：Kenney Pixel 像素字体（英文/数字）
+   文字与交互控件始终走实色底 + 高对比，不被装饰干扰。
+   换皮肤：改本文件变量与 app.js 顶部的 TILE / ICONS 即可，逻辑层不动。
+   ========================================================================== */
+
+@font-face {
+  font-family: 'KenneyPixel';
+  src: url('assets/fonts/kenpixel.ttf') format('truetype');
+  font-display: swap;
+}
+
+:root {
+  /* —— 素材采样色板（像素级取自 tiny-farm 图块）—— */
+  --ink: #3f2631;
+  --ink-2: #5d3b45;
+  --grass: #84c669;
+  --grass-d: #4e974c;
+  --grass-l: #c6e58d;
+  --soil: #cf8254;
+  --soil-d: #b86542;
+  --soil-l: #eaa56c;
+  --paper: #fdd6b4;
+  --paper-2: #fec99c;
+  --paper-l: #fff3dd;
+  --wood: #cf8254;
+  --wood-d: #763b36;
+  --red: #c34b35;
+  --red-d: #aa2c23;
+  --gold: #fdbe53;
+  --gold-d: #e38628;
+  --blue: #8b9bb4;
+  --blue-d: #52607c;
+  --blue-l: #c0cbdc;
+
+  /* —— 拼读类型色标（需彼此可辨，取素材邻近色）—— */
+  --k-v: #c34b35;
+  --k-vg: #1f7a86;
+  --k-c: #4a5b76;
+  --k-cg: #7a4fa8;
+  --k-magice: #d9721a;
+  --k-silent: #a08a84;
+
+  --w: 600px;
+  --f-ui: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --f-px: 'KenneyPixel', ui-monospace, "SF Mono", Consolas, monospace;
+  --f-word: 'KenneyPixel', "Century Gothic", "Trebuchet MS", system-ui, sans-serif;
+
+  --bd: 3px;                                   /* 像素描边统一粗细 */
+  --sh: 0 5px 0 rgba(63, 38, 49, .32);         /* 硬投影，像素风的关键 */
+  --sh-sm: 0 3px 0 rgba(63, 38, 49, .3);
+}
+
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  padding: 0;
+  color: var(--ink);
+  font-family: var(--f-ui);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  background-color: var(--grass);
+  background-image: url('assets/tex/grass.png');
+  background-size: 96px 96px;
+  background-attachment: fixed;
+  image-rendering: pixelated;
+  min-height: 100vh;
+}
+
+/* 宽屏两侧的农场远景：树、羊、栅栏，纯装饰 */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image:
+    url('assets/tinyfarm/tile_0015.png'),
+    url('assets/tinyfarm/tile_0027.png'),
+    url('assets/tinyfarm/tile_0003.png'),
+    url('assets/tinyfarm/tile_0120.png'),
+    url('assets/tinyfarm/tile_0122.png'),
+    url('assets/tinyfarm/tile_0124.png'),
+    url('assets/tinyfarm/tile_0083.png');
+  background-repeat: no-repeat;
+  background-position:
+    left -26px top 70px,
+    right -34px top 190px,
+    left 34px top 320px,
+    right 18px bottom 210px,
+    left 8px bottom 120px,
+    right -18px bottom 60px,
+    left 46px top 520px;
+  background-size: 128px, 112px, 64px, 72px, 56px, 96px, 56px;
+  image-rendering: pixelated;
+  opacity: .5;
+}
+@media (max-width: 900px) { body::before { display: none; } }
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  color: inherit;
+}
+button:disabled { cursor: default; }
+h1, h2, h3, h4, p { margin: 0; }
+ul { margin: 0; padding: 0; list-style: none; }
+
+/* ==========================================================================
+   骨架
+   ========================================================================== */
+.app {
+  position: relative;
+  z-index: 1;
+  max-width: var(--w);
+  margin: 0 auto;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px 104px;
+}
+
+/* 页脚牧场：底部一条田垄 + 草地上散置的农场物件，把剩余空间变成场景 */
+.farmfoot {
+  position: relative;
+  flex: 0 0 auto;
+  height: 190px;
+  margin: 18px -12px 0;
+}
+.farmfoot__field {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 148px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 0 12px;
+  background-image: url('assets/tex/soil.png');
+  background-size: 32px 22px;
+  border-top: 3px solid var(--ink);
+  box-shadow: inset 0 4px 0 rgba(255, 233, 201, .28);
+}
+.farmfoot__row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  white-space: nowrap;
+}
+.farmfoot__row .sp { margin: 0 -1px; }
+.farmfoot__prop { position: absolute; }
+
+/* ==========================================================================
+   顶部木牌
+   ========================================================================== */
+.banner {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  padding: 8px 10px 0;
+  background: linear-gradient(to bottom, rgba(132, 198, 105, .96) 60%, rgba(132, 198, 105, 0));
+}
+
+.banner__bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  background-color: var(--wood);
+  background-image: url('assets/tex/wood.png');
+  background-size: 24px 32px;
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  box-shadow: 0 5px 0 rgba(63, 38, 49, .45), inset 0 3px 0 rgba(255, 233, 201, .45),
+    inset 0 -3px 0 rgba(63, 38, 49, .18);
+}
+/* 木牌四角钉子 */
+.banner__bar::before,
+.banner__bar::after {
+  content: '';
+  position: absolute;
+  top: 5px;
+  width: 4px;
+  height: 4px;
+  background: var(--wood-d);
+  box-shadow: 0 0 0 1px rgba(63, 38, 49, .35);
+}
+.banner__bar::before { left: 5px; }
+.banner__bar::after { right: 5px; }
+
+.banner__back,
+.banner__badge {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  border: var(--bd) solid var(--ink);
+  border-radius: 7px;
+  background: var(--wood-d);
+  box-shadow: var(--sh-sm);
+}
+.banner__back:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(63, 38, 49, .3); }
+.banner__badge { background: var(--grass); }
+
+.banner__titles { flex: 1; min-width: 0; }
+.banner__title {
+  display: block;
+  font-size: 17px;
+  font-weight: 900;
+  color: #fff6e4;
+  letter-spacing: .5px;
+  text-shadow: 2px 2px 0 var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.banner__sub {
+  display: block;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  color: #ffe9c9;
+  opacity: .92;
+  text-shadow: 1px 1px 0 rgba(63, 38, 49, .75);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.banner__stats { display: flex; gap: 5px; flex: none; }
+
+/* 数值胶囊 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 7px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  background: var(--paper-l);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+  box-shadow: 0 2px 0 rgba(63, 38, 49, .38);
+}
+.chip b { font-family: var(--f-px); font-size: 13px; }
+.chip .pi { width: 13px; height: 13px; }
+.chip--coin { background: #ffe6ad; }
+.chip--xp { background: var(--blue-l); }
+.chip--streak { background: #ffd2c2; }
+
+/* 像素图标 */
+.pi { width: 1em; height: 1em; display: inline-block; vertical-align: -.12em; flex: none; }
+
+/* ==========================================================================
+   底部木栈道导航
+   ========================================================================== */
+.dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 30;
+  max-width: var(--w);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 3px;
+  padding: 6px 6px calc(6px + env(safe-area-inset-bottom));
+  background-color: var(--wood-d);
+  background-image: url('assets/tex/wood-dark.png');
+  background-size: 24px 32px;
+  border-top: 4px solid var(--ink);
+  box-shadow: 0 -5px 0 rgba(63, 38, 49, .22);
+}
+.dock__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 5px 2px 4px;
+  border: 2px solid transparent;
+  border-radius: 7px;
+  color: #ffe9c9;
+  font-size: 11px;
+  font-weight: 800;
+  text-shadow: 1px 1px 0 rgba(63, 38, 49, .8);
+  transition: transform .1s ease;
+}
+.dock__item:active { transform: translateY(2px); }
+.dock__icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 2px solid rgba(63, 38, 49, .45);
+  border-radius: 6px;
+  background: var(--grass);
+  box-shadow: inset 0 -3px 0 rgba(63, 38, 49, .16);
+}
+.dock__item.is-on {
+  background: var(--gold);
+  border-color: var(--ink);
+  color: var(--ink);
+  text-shadow: none;
+  box-shadow: 0 3px 0 rgba(63, 38, 49, .45), inset 0 2px 0 #ffe6ad;
+}
+.dock__item.is-on .dock__icon { background: #fff6e4; }
+
+/* ==========================================================================
+   分区标题（木牌）
+   ========================================================================== */
+.sign {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 16px 0 9px;
+  padding: 6px 11px;
+  background-color: var(--wood);
+  background-image: url('assets/tex/wood.png');
+  background-size: 24px 32px;
+  border: var(--bd) solid var(--ink);
+  border-radius: 7px;
+  box-shadow: var(--sh-sm);
+}
+.sign b {
+  font-size: 14px;
+  font-weight: 900;
+  color: #fff6e4;
+  text-shadow: 1.5px 1.5px 0 var(--ink);
+  letter-spacing: .4px;
+}
+.sign em {
+  margin-left: auto;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  color: #ffe9c9;
+  text-shadow: 1px 1px 0 rgba(63, 38, 49, .8);
+}
+.sign__ico {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  background: var(--grass);
+  border: 2px solid var(--ink);
+  border-radius: 5px;
+}
+
+/* ==========================================================================
+   面板 / 卡片
+   ========================================================================== */
+.card,
+.panel {
+  position: relative;
+  background: var(--paper);
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+  padding: 13px;
+  box-shadow: var(--sh), inset 0 0 0 2px rgba(255, 243, 221, .75);
+}
+.card + .card,
+.panel + .panel,
+.card + .panel,
+.panel + .card { margin-top: 12px; }
+
+.panel__head,
+.card__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: -13px -13px 11px;
+  padding: 7px 11px;
+  background-color: var(--wood);
+  background-image: url('assets/tex/wood.png');
+  background-size: 24px 32px;
+  border-bottom: var(--bd) solid var(--ink);
+  border-radius: 6px 6px 0 0;
+  font-size: 13px;
+  font-weight: 900;
+  color: #fff6e4;
+  text-shadow: 1px 1px 0 var(--ink);
+}
+.card__title { letter-spacing: .3px; }
+
+.panel__hint,
+.card__hint {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+.panel__hint + .btn,
+.card__hint + .btn { margin-top: 10px; }
+
+/* ==========================================================================
+   按钮
+   ========================================================================== */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 11px 18px;
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+  background: var(--paper-l);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 900;
+  box-shadow: 0 4px 0 rgba(63, 38, 49, .42), inset 0 3px 0 rgba(255, 255, 255, .55);
+  transition: transform .08s ease, box-shadow .08s ease;
+}
+.btn:active {
+  transform: translateY(4px);
+  box-shadow: 0 0 0 rgba(63, 38, 49, .42), inset 0 3px 0 rgba(255, 255, 255, .4);
+}
+.btn--primary {
+  background: var(--gold);
+  box-shadow: 0 4px 0 var(--gold-d), inset 0 3px 0 #ffe6ad;
+}
+.btn--primary:active { box-shadow: 0 0 0 var(--gold-d), inset 0 3px 0 #ffe6ad; }
+.btn--danger {
+  background: #f6bdb2;
+  color: var(--red-d);
+  box-shadow: 0 4px 0 #c07a6d, inset 0 3px 0 #ffe3dc;
+}
+.btn--ghost {
+  background: rgba(255, 243, 221, .5);
+  color: var(--ink-2);
+  box-shadow: 0 3px 0 rgba(63, 38, 49, .25);
+}
+.btn--block { display: flex; width: 100%; }
+.btn--sm { min-height: 34px; padding: 6px 11px; font-size: 13px; border-width: 2px; border-radius: 7px; }
+.btn--big { min-height: 54px; font-size: 17px; }
+.btn--sound {
+  background: var(--grass);
+  color: #14320c;
+  box-shadow: 0 4px 0 var(--grass-d), inset 0 3px 0 #b6e88a;
+  padding: 8px 16px;
+  min-height: 40px;
+  font-size: 14px;
+}
+.btn--sound:active { box-shadow: 0 0 0 var(--grass-d), inset 0 3px 0 #b6e88a; }
+.btn[disabled] { opacity: .5; filter: saturate(.7); }
+
+.row { display: flex; gap: 9px; }
+.row > * { flex: 1; }
+
+/* ==========================================================================
+   首页：农场全景
+   ========================================================================== */
+.hero {
+  position: relative;
+  margin-top: 4px;
+  border: 4px solid var(--ink);
+  border-radius: 12px;
+  overflow: hidden;
+  background-color: var(--grass);
+  background-image: url('assets/tex/grass.png');
+  background-size: 96px 96px;
+  box-shadow: 0 7px 0 rgba(63, 38, 49, .38);
+}
+
+/* 场景带：树线 + 草地 + 土垄作物，撑满卡片上半部分，不留天窗 */
+.hero__scene {
+  position: relative;
+  height: 148px;
+  overflow: hidden;
+}
+.hero__field {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 60px;
+  background-image: url('assets/tex/soil.png');
+  background-size: 32px 22px;
+  border-top: 3px solid var(--ink);
+  box-shadow: inset 0 4px 0 rgba(255, 233, 201, .3);
+}
+.hero__scene > * { position: absolute; }
+/* 场景里的图块统一加一层落地投影，避免看着像贴在背景上的贴纸 */
+.hero__scene .sp { filter: drop-shadow(0 3px 0 rgba(63, 38, 49, .22)); }
+
+/* 三层图块阵列：同层 flex 均分，层与层靠 bottom 和缩进错开 */
+.hero__row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-around;
+}
+.hero__row .sp { flex: 0 0 auto; }
+
+.hero__row--grass { bottom: 66px; left: 8%; right: 8%; }
+.hero__row--ridge { bottom: 4px; }
+
+.hero__card {
+  position: relative;
+  z-index: 2;
+  margin: 0 7px 7px;
+  padding: 11px 12px;
+  background: rgba(253, 214, 180, .97);
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+  box-shadow: var(--sh-sm);
+}
+.hero__date {
+  font-family: var(--f-px);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+  letter-spacing: .5px;
+}
+.hero__title {
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1.25;
+  margin: 3px 0 2px;
+  color: var(--ink);
+}
+.hero__desc { font-size: 12px; color: var(--ink-2); font-weight: 700; }
+
+.hero__bar {
+  position: relative;
+  height: 12px;
+  margin-top: 10px;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  background: #e8cba4;
+  overflow: hidden;
+  box-shadow: inset 0 2px 0 rgba(63, 38, 49, .18);
+}
+.hero__bar i {
+  display: block;
+  height: 100%;
+  background: repeating-linear-gradient(90deg, var(--grass) 0 6px, var(--grass-d) 6px 12px);
+  transition: width .4s ease;
+}
+
+/* ==========================================================================
+   今日地块（任务卡）
+   ========================================================================== */
+.plots { display: grid; gap: 10px; }
+
+.plot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  text-align: left;
+  padding: 11px 12px 16px;
+  background: var(--paper);
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+  box-shadow: var(--sh), inset 0 0 0 2px rgba(255, 243, 221, .7);
+  overflow: hidden;
+}
+/* 卡片底部一条土垄，像刚翻过的地 */
+.plot::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 9px;
+  background-image: url('assets/tex/soil.png');
+  background-size: 32px 22px;
+  border-top: 2px solid var(--ink);
+}
+.plot:active { transform: translateY(2px); }
+
+.plot__soil {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  flex: none;
+  background-color: var(--grass);
+  background-image: url('assets/tex/grass.png');
+  background-size: 96px 96px;
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  box-shadow: inset 0 -4px 0 rgba(63, 38, 49, .16);
+}
+.plot__body { flex: 1; min-width: 0; }
+.plot__body b { display: block; font-size: 15px; font-weight: 900; }
+.plot__body em {
+  display: block;
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+.plot__go {
+  flex: none;
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--red-d);
+  background: rgba(255, 243, 221, .9);
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+.plot.is-done { filter: saturate(.65); }
+.plot.is-done .plot__go { color: var(--grass-d); }
+
+/* 收成一排小牌 */
+.harvest { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.harvest__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 8px 4px 7px;
+  background: var(--paper);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  box-shadow: var(--sh-sm);
+}
+.harvest__item b {
+  font-family: var(--f-px);
+  font-size: 19px;
+  line-height: 1.1;
+  color: var(--ink);
+}
+.harvest__item em { font-style: normal; font-size: 11px; font-weight: 700; color: var(--ink-2); }
+.harvest__ico { display: grid; place-items: center; width: 28px; height: 28px; font-size: 22px; }
+
+/* 农场地图：四个功能区入口，各用一块小景 */
+.mapgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.mapcard {
+  position: relative;
+  padding: 0 0 9px;
+  background: var(--paper);
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+  box-shadow: var(--sh-sm);
+  overflow: hidden;
+  text-align: center;
+}
+.mapcard:active { transform: translateY(2px); }
+.mapcard__scene {
+  display: grid;
+  place-items: center;
+  height: 58px;
+  margin-bottom: 7px;
+  background-color: var(--grass);
+  background-image: url('assets/tex/grass.png');
+  background-size: 96px 96px;
+  border-bottom: var(--bd) solid var(--ink);
+  box-shadow: inset 0 -5px 0 rgba(63, 38, 49, .14);
+}
+.mapcard b { display: block; font-size: 13px; font-weight: 900; }
+.mapcard em {
+  display: block;
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink-2);
+  margin-top: 1px;
+}
+
+/* ==========================================================================
+   学习：木牌黑板 + 字母田
+   ========================================================================== */
+.fieldbar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 10px;
+  margin-bottom: 10px;
+  background: var(--paper);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  box-shadow: var(--sh-sm);
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink-2);
+}
+.fieldbar b { font-family: var(--f-px); font-size: 13px; color: var(--ink); white-space: nowrap; }
+
+.progressline {
+  flex: 1;
+  height: 10px;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  background: #e8cba4;
+  overflow: hidden;
+}
+.progressline i {
+  display: block;
+  height: 100%;
+  background: repeating-linear-gradient(90deg, var(--grass) 0 5px, var(--grass-d) 5px 10px);
+  transition: width .3s ease;
+}
+
+.learn { display: flex; flex-direction: column; gap: 11px; }
+
+/* 本批收获：每学会一个词就长出一棵菜 */
+.batchbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: rgba(255, 243, 221, .88);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  box-shadow: var(--sh-sm);
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink-2);
+}
+.batchbar__crops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  margin-left: auto;
+}
+.batchbar__crops .sp { transition: filter .2s, opacity .2s; }
+.batchbar__crops .is-pending { filter: grayscale(1); opacity: .4; }
+
+/* 词牌：外层木框，内层奶油纸 */
+.board {
+  position: relative;
+  padding: 7px;
+  background-color: var(--wood);
+  background-image: url('assets/tex/wood.png');
+  background-size: 24px 32px;
+  border: 4px solid var(--ink);
+  border-radius: 12px;
+  box-shadow: 0 7px 0 rgba(63, 38, 49, .38), inset 0 0 0 3px rgba(63, 38, 49, .28);
+}
+.board__paper {
+  position: relative;
+  padding: 16px 13px 14px;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  text-align: center;
+  box-shadow: inset 0 0 0 3px var(--paper);
+}
+.board__lv {
+  position: absolute;
+  top: 7px;
+  left: 9px;
+  font-family: var(--f-px);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--ink-2);
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: 5px;
+  padding: 0 5px;
+}
+.board__cn { font-size: 19px; font-weight: 900; line-height: 1.35; }
+.board__word {
+  font-family: var(--f-word);
+  font-size: 62px;
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: 1.5px;
+  margin: 6px 0 2px;
+  word-break: break-word;
+}
+.board__word .seg {
+  display: inline-block;
+  padding: 0 1px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.board__word .seg:active { background: rgba(63, 38, 49, .12); }
+/* 词组：拆不了字母，整条显示，长词组自动折行 */
+.board__word--phr { font-size: 28px; line-height: 1.35; letter-spacing: .5px; }
+.legend--phr { display: block; text-align: center; font-size: 12px; font-weight: 700; color: var(--ink-2); }
+.board__ipa {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-2);
+  letter-spacing: .3px;
+}
+.board .btn--sound { margin-top: 11px; }
+
+.k-v { color: var(--k-v); }
+.k-vg { color: var(--k-vg); }
+.k-c { color: var(--k-c); }
+.k-cg { color: var(--k-cg); }
+.k-magice { color: var(--k-magice); }
+.k-silent { color: var(--k-silent); }
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 11px;
+  justify-content: center;
+  margin-top: 10px;
+  padding: 7px 9px;
+  background: rgba(255, 243, 221, .82);
+  border: 2px solid var(--ink);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: var(--sh-sm);
+}
+.legend span { white-space: nowrap; }
+
+/* 拼字区：土垄 + 木牌字母 */
+.bed {
+  padding: 10px;
+  background-image: url('assets/tex/soil.png');
+  background-size: 32px 22px;
+  border: var(--bd) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 3px rgba(63, 38, 49, .22), var(--sh-sm);
+}
+.slots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  justify-content: center;
+  min-height: 84px;
+  padding: 10px;
+  border-radius: 7px;
+  background: rgba(255, 243, 221, .28);
+  border: 2px dashed rgba(63, 38, 49, .45);
+}
+.slots.is-bad {
+  border-color: var(--red-d);
+  background: rgba(195, 75, 53, .28);
+  animation: shake .4s;
+}
+.slots.is-ok {
+  border-color: var(--grass-d);
+  background: rgba(198, 229, 141, .5);
+}
+.slot {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 58px;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 6px;
+  font-family: var(--f-word);
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--ink);
+  box-shadow: 0 3px 0 rgba(63, 38, 49, .35);
+}
+.slot--empty {
+  background: rgba(255, 243, 221, .3);
+  border-style: dashed;
+  color: transparent;
+  box-shadow: none;
+}
+
+.pool {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  padding: 2px;
+}
+.letter {
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 62px;
+  background: var(--paper);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  font-family: var(--f-word);
+  font-size: 34px;
+  font-weight: 700;
+  color: var(--ink);
+  box-shadow: 0 4px 0 rgba(63, 38, 49, .42), inset 0 3px 0 #ffe9c9;
+  transition: transform .08s ease, box-shadow .08s ease, opacity .12s ease;
+}
+.letter:active {
+  transform: translateY(4px);
+  box-shadow: 0 0 0 rgba(63, 38, 49, .42), inset 0 3px 0 #ffe9c9;
+}
+.letter.is-used { opacity: .22; pointer-events: none; }
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-7px); }
+  75% { transform: translateX(7px); }
+}
+
+.feedback {
+  text-align: center;
+  font-size: 14px;
+  font-weight: 900;
+  min-height: 22px;
+  color: var(--ink-2);
+}
+.feedback--ok { color: #2c5c1f; }
+.feedback--bad { color: var(--red-d); }
+
+/* ==========================================================================
+   闯关
+   ========================================================================== */
+.quiz__q { text-align: center; font-size: 24px; font-weight: 900; padding: 6px 0 2px; }
+.quiz__ipa { text-align: center; font-size: 14px; font-weight: 700; color: var(--ink-2); }
+
+.opts { display: grid; gap: 9px; margin-top: 13px; }
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 50px;
+  padding: 11px 14px;
+  text-align: left;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  font-size: 19px;
+  font-weight: 800;
+  font-family: var(--f-word);
+  letter-spacing: .6px;
+  color: var(--ink);
+  box-shadow: 0 4px 0 rgba(63, 38, 49, .35), inset 0 3px 0 #ffe9c9;
+}
+.opt:active { transform: translateY(3px); box-shadow: 0 1px 0 rgba(63, 38, 49, .35); }
+.opt.is-right {
+  background: var(--grass-l);
+  border-color: #2c5c1f;
+  color: #244d18;
+  box-shadow: 0 4px 0 #2c5c1f, inset 0 3px 0 rgba(255, 255, 255, .5);
+}
+.opt.is-wrong {
+  background: #f6bdb2;
+  border-color: var(--red-d);
+  color: var(--red-d);
+  box-shadow: 0 4px 0 #a35c4e, inset 0 3px 0 #ffe3dc;
+}
+/* 词组的四个选项：Hong Kong-Zhuhai-Macao Bridge 这种会很长，字号降一档并允许折行 */
+.opts--phr .opt {
+  font-size: 17px;
+  line-height: 1.3;
+  min-height: 46px;
+  padding: 9px 12px;
+  letter-spacing: .2px;
+  word-break: break-word;
+}
+.opts--phr .opt:disabled { opacity: .55; }
+
+/* 结果页 */
+.result { text-align: center; padding: 16px 12px 18px; }
+.result__big { display: grid; place-items: center; min-height: 72px; }
+.result__score { font-size: 24px; font-weight: 900; margin-top: 8px; }
+.result__meta { font-size: 13px; font-weight: 700; color: var(--ink-2); margin-top: 4px; }
+
+/* ==========================================================================
+   商店：集市摊位
+   ========================================================================== */
+.stalls { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.stall {
+  position: relative;
+  padding: 0 0 11px;
+  background: var(--paper);
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+  text-align: center;
+  box-shadow: var(--sh);
+  overflow: hidden;
+}
+/* 摊位顶棚：红白条纹 */
+.stall__roof {
+  display: block;
+  height: 22px;
+  background: repeating-linear-gradient(90deg, var(--red) 0 12px, var(--paper-l) 12px 24px);
+  border-bottom: var(--bd) solid var(--ink);
+}
+.stall__emoji {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  margin: 9px auto 0;
+  font-size: 30px;
+  line-height: 1;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  box-shadow: inset 0 -4px 0 rgba(63, 38, 49, .12);
+}
+.stall__name { font-size: 14px; font-weight: 900; margin-top: 7px; padding: 0 8px; }
+.stall__price {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--f-px);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink);
+  background: #ffe6ad;
+  border: 2px solid var(--ink);
+  border-radius: 5px;
+  padding: 1px 7px;
+  margin: 5px 0 8px;
+}
+.stall .btn { margin: 0 9px; width: calc(100% - 18px); }
+
+/* ==========================================================================
+   我的：成长
+   ========================================================================== */
+.profilehead { display: flex; align-items: center; gap: 12px; }
+.avatar {
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  flex: none;
+  background-color: var(--grass);
+  background-image: url('assets/tex/grass.png');
+  background-size: 96px 96px;
+  border: var(--bd) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: inset 0 -5px 0 rgba(63, 38, 49, .16);
+}
+.profilehead__name { font-size: 19px; font-weight: 900; }
+.profilehead__lv { font-size: 12px; font-weight: 700; color: var(--ink-2); }
+
+.statgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+.stat {
+  padding: 9px 5px 8px;
+  text-align: center;
+  background-color: var(--grass);
+  background-image: url('assets/tex/grass.png');
+  background-size: 96px 96px;
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  box-shadow: inset 0 -5px 0 rgba(63, 38, 49, .18);
+}
+.stat b {
+  display: block;
+  font-family: var(--f-px);
+  font-size: 21px;
+  line-height: 1.15;
+  color: #fff6e4;
+  text-shadow: 1.5px 1.5px 0 var(--ink);
+}
+.stat span {
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff6e4;
+  text-shadow: 1px 1px 0 rgba(63, 38, 49, .7);
+}
+
+/* ==========================================================================
+   列表
+   ========================================================================== */
+.wordlist { display: grid; gap: 7px; }
+.wordrow {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  background: var(--paper-l);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  box-shadow: var(--sh-sm);
+}
+.wordrow__body { flex: 1; min-width: 0; }
+.wordrow__w {
+  display: block;
+  font-family: var(--f-word);
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: .3px;
+}
+.wordrow__cn { display: block; font-size: 12px; font-weight: 600; color: var(--ink-2); }
+
+.badge {
+  flex: none;
+  padding: 2px 7px;
+  border: 2px solid var(--ink);
+  border-radius: 5px;
+  font-size: 11px;
+  font-weight: 800;
+  background: #ffd2c2;
+  color: var(--red-d);
+  white-space: nowrap;
+}
+.badge--soft { background: var(--paper-2); color: var(--ink-2); }
+
+/* ==========================================================================
+   表单 / 弹层
+   ========================================================================== */
+.field { margin-bottom: 11px; }
+.field label {
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+.input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+  outline: none;
+  box-shadow: inset 0 3px 0 rgba(63, 38, 49, .1);
+}
+.input:focus { box-shadow: inset 0 3px 0 rgba(63, 38, 49, .1), 0 0 0 3px rgba(253, 190, 83, .75); }
+.input--sm { min-height: 36px; padding: 7px 10px; font-size: 14px; }
+
+.sheet-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(63, 38, 49, .55);
+}
+.sheet {
+  width: 100%;
+  max-width: var(--w);
+  padding: 16px 14px calc(18px + env(safe-area-inset-bottom));
+  background-color: var(--paper);
+  background-image: url('assets/tex/wood.png');
+  background-size: 24px 32px;
+  border-top: 5px solid var(--ink);
+  border-radius: 14px 14px 0 0;
+  max-height: 86vh;
+  overflow-y: auto;
+  box-shadow: 0 -6px 0 rgba(63, 38, 49, .3);
+  animation: rise .22s ease;
+}
+@keyframes rise {
+  from { transform: translateY(30px); opacity: .6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+.sheet__title {
+  font-size: 17px;
+  font-weight: 900;
+  color: #fff6e4;
+  text-shadow: 1.5px 1.5px 0 var(--ink);
+  margin-bottom: 11px;
+}
+.sheet .field label { color: #fff0d6; text-shadow: 1px 1px 0 rgba(63, 38, 49, .85); }
+.sheet__foot { display: flex; gap: 9px; margin-top: 14px; }
+
+/* ==========================================================================
+   空态 / 提示 / 撒花
+   ========================================================================== */
+.empty {
+  text-align: center;
+  padding: 26px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-2);
+  background: rgba(255, 243, 221, .55);
+  border: var(--bd) dashed rgba(63, 38, 49, .45);
+  border-radius: 10px;
+}
+.empty__icon { display: grid; place-items: center; margin-bottom: 7px; }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 104px;
+  transform: translateX(-50%);
+  padding: 9px 16px;
+  background: var(--ink);
+  color: #fff6e4;
+  border: 2px solid #241520;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 800;
+  z-index: 90;
+  opacity: 0;
+  transition: opacity .2s, transform .2s;
+  pointer-events: none;
+  white-space: nowrap;
+  max-width: 90vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  box-shadow: 0 4px 0 rgba(0, 0, 0, .25);
+}
+.toast.is-on { opacity: 1; transform: translateX(-50%) translateY(-6px); }
+
+#fx { position: fixed; inset: 0; pointer-events: none; z-index: 95; }
+.confetti { position: absolute; width: 8px; height: 8px; animation: fall 1.5s ease-in forwards; }
+@keyframes fall {
+  from { transform: translateY(-8vh) rotate(0); opacity: 1; }
+  to { transform: translateY(104vh) rotate(520deg); opacity: 0; }
+}
+
+.hr { height: 0; border: none; border-top: 2px dashed rgba(63, 38, 49, .28); margin: 13px 0; }
+.muted { color: var(--ink-2); font-size: 12px; }
+
+/* 数字统一用像素字体，强化游戏感 */
+.px { font-family: var(--f-px); }
+
+/* ==========================================================================
+   双人档案：切换、头像、对决
+   —— 两个孩子各记各的账，同时能看见对方的进度
+   ========================================================================== */
+
+/* 顶部木牌左侧头像：点一下切人，谁在用一眼可见 */
+.banner__badge--who {
+  padding: 0;
+  cursor: pointer;
+  background: var(--grass);
+}
+.banner__badge--who:active { transform: translateY(2px); box-shadow: none; }
+
+/* 切换弹层里的档案行 */
+.whorow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  margin-bottom: 9px;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+  box-shadow: var(--sh-sm);
+}
+.whorow.is-on {
+  background: #e8f6cf;
+  box-shadow: var(--sh-sm), inset 0 0 0 2px var(--grass-d);
+}
+.whorow:active { transform: translateY(2px); box-shadow: none; }
+.whorow__av {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 56px;
+  height: 56px;
+  background: var(--grass);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+}
+.whorow__body { display: block; flex: 1; min-width: 0; }
+.whorow__body b { display: block; font-size: 16px; font-weight: 900; color: var(--ink); }
+.whorow__body em {
+  display: block;
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+/* 家长中心：头像选择 */
+.avatar-pick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.avatarbtn {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  cursor: pointer;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 8px;
+  box-shadow: var(--sh-sm);
+}
+.avatarbtn.is-on {
+  background: var(--gold);
+  box-shadow: var(--sh-sm), inset 0 0 0 2px var(--gold-d);
+}
+.avatarbtn:active { transform: translateY(2px); box-shadow: none; }
+
+/* 首页：对方的战况小条 */
+.vspeek {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px 10px;
+  text-align: left;
+  cursor: pointer;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+  box-shadow: var(--sh-sm);
+}
+.vspeek:active { transform: translateY(2px); box-shadow: none; }
+.vspeek__av {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  background: var(--grass);
+  border: var(--bd) solid var(--ink);
+  border-radius: 7px;
+}
+.vspeek__vs {
+  flex: none;
+  font-family: var(--f-px);
+  font-size: 14px;
+  font-weight: 900;
+  color: var(--red-d);
+}
+.vspeek__body { flex: 1; min-width: 0; }
+.vspeek__body b {
+  display: block;
+  font-size: 13px;
+  font-weight: 900;
+  color: var(--ink);
+  line-height: 1.35;
+}
+.vspeek__body em {
+  display: block;
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.vspeek__go {
+  flex: none;
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--red-d);
+  white-space: nowrap;
+}
+
+/* 对决页：两张选手卡 */
+.vshead {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+.vscard {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 10px 6px 11px;
+  cursor: pointer;
+  background: var(--paper);
+  border: var(--bd) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: var(--sh);
+}
+.vscard--me { background: #e8f6cf; }
+.vscard__av {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  background: var(--grass);
+  border: var(--bd) solid var(--ink);
+  border-radius: 9px;
+}
+.vscard b { font-size: 15px; font-weight: 900; color: var(--ink); line-height: 1.2; }
+.vscard em { font-style: normal; font-family: var(--f-px); font-size: 14px; color: var(--ink-2); }
+.vscard .badge { margin-top: 3px; }
+.vshead__mid {
+  font-family: var(--f-px);
+  font-size: 22px;
+  font-weight: 900;
+  color: var(--red-d);
+  text-shadow: 2px 2px 0 var(--paper-l);
+}
+
+/* 对决页：逐项对比，领先的一侧亮起来 */
+.vslist { display: block; }
+.vsrow {
+  display: grid;
+  grid-template-columns: 1fr 1.15fr 1fr;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 0;
+  border-bottom: 2px dashed rgba(63, 38, 49, .2);
+}
+.vsrow:last-child { border-bottom: none; }
+.vsrow__v {
+  font-family: var(--f-px);
+  font-size: 20px;
+  line-height: 1.2;
+  text-align: center;
+  color: var(--ink-2);
+  border-radius: 6px;
+  padding: 3px 0;
+}
+.vsrow__v.is-win {
+  font-size: 23px;
+  color: var(--red-d);
+  background: var(--gold);
+  box-shadow: inset 0 0 0 2px var(--gold-d);
+}
+.vsrow__k {
+  display: block;
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--ink-2);
+  text-align: center;
+  line-height: 1.4;
+}
+.vsrow__k .pi { vertical-align: -3px; margin-right: 2px; }

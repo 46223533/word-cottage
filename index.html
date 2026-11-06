@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#84c669">
+<title>单词小屋 · 农场学习乐园</title>
+
+<!-- 可安装（PWA）：平板加到主屏幕后全屏打开，没有地址栏 -->
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="assets/icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="assets/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="单词小屋">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="application-name" content="单词小屋">
+<meta name="description" content="人教 PEP 课本同步的小学英语背单词工作台">
+<meta name="format-detection" content="telephone=no">
+
+<link rel="stylesheet" href="assets/sprites.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app" id="app"></div>
+<div id="fx"></div>
+
+<script src="words.js"></script>
+<script src="tools/legacy-map.js"></script>
+<script src="app.js"></script>
+<script>
+/* 离线缓存：首次打开把全部素材存下来，之后断网也能背
+   （file:// 直接打开时跳过，浏览器不允许 localhost 以外的 HTTP 页面注册） */
+if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+  window.addEventListener('load', function () {
+    navigator.serviceWorker.register('sw.js').catch(function () { /* 离线不可用不影响主流程 */ });
+  });
+}
+</script>
+</body>
+</html>

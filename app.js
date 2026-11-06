@@ -1385,6 +1385,128 @@ function viewMe() {
   ${tabbar()}`;
 }
 
+/* ============================================================
+   两台设备同步（不依赖服务器的方案）
+
+   两个孩子各用一台平板时，学习记录分别存在各自机器的 localStorage 里，
+   天然不相通。这里提供一串「同步码」：一台生成、另一台粘贴导入。
+
+   编码思路：体积大头是 states（247 条 × 4 个数字）。
+   把到期日改存「距今天几天」，一条从 30 字节压到 10 字节左右，
+   两个人的完整记录约 5-6KB，微信一条消息发得下。
+   ============================================================ */
+
+const SYNC_PREFIX = 'XC1:';
+
+function b64enc(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin);
+}
+function b64dec(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+
+function daysFromToday(s) {
+  const a = new Date(todayStr() + 'T00:00:00');
+  const b = new Date(String(s) + 'T00:00:00');
+  const n = Math.round((b - a) / 86400000);
+  return isNaN(n) ? 0 : n;
+}
+
+/* 一条记录压成 "索引,盒子,距今天几天,错几次" */
+function packStates(states) {
+  return Object.keys(states || {}).map(Number).sort((a, b) => a - b).map(function (i) {
+    const st = states[i] || {};
+    return i + ',' + (st.box || 0) + ',' + daysFromToday(st.due || todayStr()) + ',' + (st.wrong || 0);
+  }).join(';');
+}
+
+function unpackStates(str) {
+  const out = {};
+  if (!str) return out;
+  String(str).split(';').forEach(function (seg) {
+    if (!seg) return;
+    const a = seg.split(',').map(Number);
+    if (a.length < 4 || a.some(function (n) { return isNaN(n); })) return;
+    if (!WORDS[a[0]]) return;                     // 词库换过、这个词没了就跳过
+    out[a[0]] = {
+      box: Math.min(MASTER_BOX, Math.max(0, a[1])),
+      due: addDays(todayStr(), Math.max(-3650, Math.min(3650, a[2]))),
+      wrong: Math.max(0, a[3])
+    };
+  });
+  return out;
+}
+
+function packSync() {
+  const out = {
+    v: 1,
+    p: {},
+    s: db.shop,
+    o: db.orders.slice(-60),
+    c: { perDay: db.cfg.perDay }
+  };
+  Object.keys(db.profiles).forEach(function (k) {
+    const pr = db.profiles[k];
+    out.p[k] = {
+      n: pr.name, t: pr.tile, b: pr.book,
+      x: pr.xp, co: pr.coins, st: pr.streak, ld: pr.lastDay,
+      lg: [pr.log.date || '', pr.log.newN || 0, pr.log.revN || 0, pr.log.gameN || 0],
+      s: packStates(pr.states)
+    };
+  });
+  return SYNC_PREFIX + b64enc(JSON.stringify(out));
+}
+
+function applySync(raw) {
+  const code = String(raw || '').replace(/\s+/g, '');
+  if (!code) return { ok: false, msg: '先把同步码粘贴到框里' };
+  if (code.indexOf(SYNC_PREFIX) !== 0) return { ok: false, msg: '这串码不对，开头应该是 ' + SYNC_PREFIX };
+  let body = null;
+  try { body = JSON.parse(b64dec(code.slice(SYNC_PREFIX.length))); }
+  catch (e) { return { ok: false, msg: '这串码不完整，可能复制时被截断了' }; }
+  if (!body || !body.p) return { ok: false, msg: '这串码里没有学习记录' };
+
+  let n = 0;
+  Object.keys(body.p).forEach(function (k) {
+    const src = body.p[k];
+    const pr = db.profiles[k];
+    if (!src || !pr) return;
+    pr.name = String(src.n || pr.name).slice(0, 8);
+    pr.tile = Number(src.t) || pr.tile;
+    pr.book = (src.b === '4A' || src.b === '6A') ? src.b : pr.book;
+    pr.xp = Number(src.x) || 0;
+    pr.coins = Number(src.co) || 0;
+    pr.streak = Number(src.st) || 0;
+    pr.lastDay = src.ld || '';
+    if (Object.prototype.toString.call(src.lg) === '[object Array]') {
+      pr.log = {
+        date: src.lg[0] || '',
+        newN: Number(src.lg[1]) || 0,
+        revN: Number(src.lg[2]) || 0,
+        gameN: Number(src.lg[3]) || 0
+      };
+    }
+    pr.states = unpackStates(src.s);
+    pr.statesV3 = true;                            // 迁过来的已是新索引
+    n++;
+  });
+  if (!n) return { ok: false, msg: '这串码里的档案对不上，可能来自别的版本' };
+
+  if (Object.prototype.toString.call(body.s) === '[object Array]' && body.s.length) db.shop = body.s;
+  if (Object.prototype.toString.call(body.o) === '[object Array]') db.orders = body.o;
+  if (body.c && body.c.perDay) {
+    db.cfg.perDay = Math.min(30, Math.max(1, Number(body.c.perDay) || 5));
+  }
+  saveDB();
+  return { ok: true, msg: '已同步 ' + n + ' 个小朋友的记录' };
+}
+
 /* ---------- 家长中心 ---------- */
 function viewParentGate() {
   return `
@@ -1470,6 +1592,18 @@ function viewParent() {
               : `<button class="btn btn--sm btn--primary" data-act="finishOrder" data-id="${o.id}">标记已给</button>`}
           </div>`).join('')}
       </div>` : '<p class="card__hint">还没有兑换记录</p>'}
+    </div>
+
+    <div class="card">
+      <div class="card__title">两台设备同步</div>
+      <p class="card__hint">两人各用一台平板时，学习记录存在各自的机器上，不会自动互通。想让另一台看到最新进度：在这台点「生成同步码」，用微信发过去，对方粘贴后点「导入」。</p>
+      <div class="row" style="gap:8px">
+        <button class="btn btn--sm btn--primary" data-act="syncMake" style="flex:1">生成同步码</button>
+        <button class="btn btn--sm" data-act="syncCopy" style="flex:1">复制</button>
+      </div>
+      <textarea class="input input--sync" id="syncBox" rows="4" placeholder="同步码会自动填到这里；收到对方的码，粘进来点下面的导入"></textarea>
+      <button class="btn btn--block btn--sm" style="margin-top:8px" data-act="syncApply">导入这串码</button>
+      <p class="card__hint" id="syncHint"></p>
     </div>
 
     <div class="card">
@@ -1894,6 +2028,45 @@ document.addEventListener('click', (e) => {
       pf.tile = Number(t.dataset.t) || 108;
       saveDB();
       render();
+      break;
+    }
+    /* 设备间同步 */
+    case 'syncMake': {
+      const code = packSync();
+      const box = $('#syncBox');
+      if (box) box.value = code;
+      const hint = $('#syncHint');
+      if (hint) hint.textContent = '已生成 ' + code.length + ' 个字符，长按上面框里的内容全选复制。';
+      break;
+    }
+    case 'syncCopy': {
+      const box = $('#syncBox');
+      const val = (box && box.value || '').trim();
+      const hint = $('#syncHint');
+      if (!val) { toast('先点「生成同步码」'); break; }
+      const done = function (ok) {
+        if (hint) hint.textContent = ok ? '已复制，去微信粘给对方' : '这台设备不让自动复制，请长按框里的内容手动全选复制';
+        if (ok) toast('已复制');
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(val).then(function () { done(true); }, function () { done(false); });
+      } else {
+        if (box) { box.focus(); box.select(); }
+        let ok = false;
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        done(ok);
+      }
+      break;
+    }
+    case 'syncApply': {
+      const box = $('#syncBox');
+      const r = applySync(box && box.value);
+      const hint = $('#syncHint');
+      if (hint) hint.textContent = r.msg;
+      if (!r.ok) { toast(r.msg); break; }
+      ui.learn = null; ui.spell = null; ui.game = null; ui.quiz = null;
+      render();
+      toast(r.msg);
       break;
     }
     case 'addItem': sheetEditItem({ id: '', name: '', price: 20, emoji: '🎁' }); break;    case 'editItem': {

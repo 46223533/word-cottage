@@ -1126,6 +1126,19 @@ ul { margin: 0; padding: 0; list-style: none; }
   color: var(--ink-2);
   margin-bottom: 4px;
 }
+/* 同步码输入框：等宽字体、自动折行，方便一眼看出有没有复制全 */
+.input--sync {
+  margin-top: 8px;
+  min-height: 96px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Courier New", monospace;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: .2px;
+  resize: vertical;
+  word-break: break-all;
+}
+
 .input {
   width: 100%;
   min-height: 44px;

@@ -983,6 +983,22 @@ function picHTML(w, small) {
   return '<div class="pic' + (small ? ' pic--sm' : '') + '" aria-hidden="true">' + esc(e) + '</div>';
 }
 
+/* 语境例句：把目标词加粗，点一下能听整句（听整句比听单词更能带出语境） */
+function exHTML(w, cls) {
+  if (!w.ex) return '';
+  let html = esc(w.ex);
+  const target = w.w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  try {
+    html = html.replace(
+      new RegExp('(^|[^A-Za-z])(' + target + ')(?=[^A-Za-z]|$)', 'i'),
+      '$1<b>$2</b>'
+    );
+  } catch (e) { /* 匹配不了就整句普通显示 */ }
+  return '<div class="ex ' + (cls || '') + '" data-act="sayEx" data-w="' + w.i + '">'
+    + '<span class="ex__q">“</span>' + html + '<span class="ex__q">”</span>'
+    + '<i class="ex__play">' + ICONS.speak + '</i></div>';
+}
+
 function recHTML(w) {
   if (!recSupported()) {
     return '<div class="recbox recbox--off">这台设备（或现在这个打开方式）录不了音，跟着读三遍效果一样</div>';
@@ -1049,6 +1065,7 @@ function viewLearn() {
           <button class="btn btn--sound" data-act="say" data-w="${i}">${ICONS.speak} 听发音</button>
         </div>
       </div>
+      ${exHTML(w, 'ex--show')}
       ${isPhrase(w)
         ? '<div class="legend legend--phr">词组按整句读，不拆字母</div>'
         : `<div class="legend">
@@ -1088,7 +1105,7 @@ function viewLearn() {
   </main>`;
   }
 
-  /* 第三步：看英文选中文（这里不能给配图，图就是答案） */
+  /* 第三步：看语境选意思（这里不能给配图，图就是答案） */
   if (s.phase === 'meaning') {
     const m = ui.meaning || {};
     const opts = m.opts || [];
@@ -1100,7 +1117,8 @@ function viewLearn() {
           <button class="btn btn--sound" data-act="say" data-w="${i}">${ICONS.speak} 听发音</button>
         </div>
       </div>
-      <div class="ask">这个词是什么意思？</div>
+      ${exHTML(w, 'ex--ask')}
+      <div class="ask">${w.ex ? '这句话里，它是什么意思？' : '这个词是什么意思？'}</div>
       <div class="meaningopts">
         ${opts.map((cn) => {
           const dead = (m.tried || []).indexOf(cn) !== -1;
@@ -2169,6 +2187,11 @@ document.addEventListener('click', (e) => {
 
     /* 发音 */
     case 'say': speak(WORDS[Number(t.dataset.w)].w); break;
+    case 'sayEx': {
+      const wex = WORDS[Number(t.dataset.w)];
+      if (wex && wex.ex) speak(wex.ex, 0.8);
+      break;
+    }
     case 'seg': {
       const w = WORDS[Number(t.dataset.w)];
       speak(w.w);

@@ -821,6 +821,45 @@ ul { margin: 0; padding: 0; list-style: none; }
 }
 .pic--sm { font-size: 42px; margin: 0 0 2px; }
 
+/* 语境例句：目标词加粗，点整句能听 */
+.ex {
+  position: relative;
+  margin: 9px 0 2px;
+  padding: 9px 30px 9px 11px;
+  background: rgba(255, 243, 221, .9);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.45;
+  color: var(--ink-2);
+  cursor: pointer;
+  box-shadow: var(--sh-sm);
+}
+.ex b {
+  color: var(--ink);
+  font-weight: 900;
+  background: linear-gradient(transparent 62%, rgba(253, 190, 83, .85) 62%);
+  padding: 0 1px;
+}
+.ex__q { opacity: .45; }
+.ex__play {
+  position: absolute;
+  right: 7px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 20px;
+  height: 20px;
+  opacity: .55;
+}
+.ex__play svg { width: 100%; height: 100%; display: block; }
+.ex--ask {
+  font-size: 16px;
+  border-color: var(--paper-l);
+  background: #fff9ec;
+}
+.ex--show { margin-top: 10px; }
+
 /* 四步指示器 */
 .steps {
   display: flex;

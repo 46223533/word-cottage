@@ -60,11 +60,24 @@ const BOOK_INDEX = (function () {
   return m;
 })();
 
+/* 每册有哪些单元号，如 { '4A': [1,2,3,4,5,6] }。
+   必须定义在 loadDB() 之前——migrate 要用它校验存档里的单元号。 */
+const UNIT_SET = (function () {
+  const m = {};
+  WORDS.forEach(function (x) {
+    const a = m[x.book] = m[x.book] || [];
+    if (a.indexOf(x.unit) === -1) a.push(x.unit);
+  });
+  Object.keys(m).forEach(function (k) { m[k].sort(function (a, b) { return a - b; }); });
+  return m;
+})();
+
 function newProfile(name, tile, book) {
   return {
     name: name,
     tile: tile || 109,          // 头像用的图块编号
     book: book || '4A',         // 这个档案在学哪一册
+    units: [],                  // 选中的单元号；空数组＝整册所有单元
     xp: 0, coins: 0, streak: 0, lastDay: '',
     states: {},                 // { 词条索引: {box, due, wrong} }
     statesV3: true,             // 新建档案的记录已经是新索引，不需要迁移
@@ -118,6 +131,10 @@ function migrate(d) {
     if (NAME_MAP[p.name]) p.name = NAME_MAP[p.name];
     /* 老存档没有 book：按档案位推断（a1=哥哥六年级，a2=妹妹四年级） */
     if (!p.book || !BOOK_INFO[p.book]) p.book = (k === 'a1') ? '6A' : '4A';
+    /* 老存档没有 units：空数组＝整册所有单元，等同以前的行为 */
+    if (!Array.isArray(p.units)) p.units = [];
+    /* 单元号只保留这一册里真有的，册次换了也不会串台 */
+    p.units = p.units.filter(function (u) { return UNIT_SET[p.book] && UNIT_SET[p.book].indexOf(u) !== -1; });
     /* 词库从「ECDICT 1464 词」换成了「课本词表」，索引全变了。
        老存档的 states 以旧序号为键，必须按「旧序号 → 旧单词 → 新词条」重映射，
        对不上的（不在课本里的超纲词）丢弃。只做一次。 */
@@ -177,29 +194,54 @@ function stateOf(i) { return P().states[i]; }
 
 /* 当前档案要学的那一册的词条索引 */
 function bookList(p) { return BOOK_INDEX[p ? p.book : ''] || []; }
+
+/* 孩子选中的单元（空＝整册） */
+function scopeUnits(p) { return (p && Array.isArray(p.units)) ? p.units : []; }
+function inScope(p, w) {
+  const sc = scopeUnits(p);
+  return !sc.length || (!!w && sc.indexOf(w.unit) !== -1);
+}
+/* 当前学习范围：选中的单元里的词条，按课本顺序。
+   新词、复习、错词、闯关都只在这个范围里取词；
+   干扰项（三选一/四选一）仍用整册 bookList，选项才够丰富。 */
+function activePool(p) {
+  const sc = scopeUnits(p);
+  const pool = bookList(p);
+  if (!sc.length) return pool;
+  return pool.filter(function (i) { return WORDS[i] && sc.indexOf(WORDS[i].unit) !== -1; });
+}
+/* 该册的单元清单：[{unit, list:[词条索引]}]，按课本顺序 */
+function bookUnits(p) {
+  const out = [];
+  const at = {};
+  bookList(p).forEach(function (i) {
+    const w = WORDS[i];
+    if (!w) return;
+    if (!at[w.unit]) { at[w.unit] = { unit: w.unit, list: [] }; out.push(at[w.unit]); }
+    at[w.unit].list.push(i);
+  });
+  return out;
+}
+/* 给孩子看的范围说明 */
+function scopeLabel(p) {
+  const sc = scopeUnits(p);
+  if (!sc.length) return '整册（' + bookLabel(p) + '）';
+  if (sc.length === 1) return 'Unit ' + sc[0];
+  return 'Unit ' + sc.slice(0, 3).join('、') + (sc.length > 3 ? ' 等 ' + sc.length + ' 个单元' : '');
+}
+
 function bookLabel(p) {
   const b = BOOK_INFO[p ? p.book : ''];
   return b ? b.name : '课本';
 }
 /* 当前进度：正在学第几单元、这一册学了多少 */
 function progressInfo(p) {
-  const pool = bookList(p);
-  let total = 0, learned = 0, unit = 0, unitTotal = 0, unitLearned = 0;
+  const pool = activePool(p);
+  let total = 0, learned = 0;
   for (let k = 0; k < pool.length; k++) {
-    const i = pool[k];
-    const w = WORDS[i];
-    if (!w) continue;
+    if (!WORDS[pool[k]]) continue;
     total++;
-    const st = p.states[i];
-    if (st) learned++;
-    if (!unit) {
-      unit = w.unit;
-      unitTotal++;
-      if (st) unitLearned++;
-    } else if (w.unit === unit) {
-      unitTotal++;
-      if (st) unitLearned++;
-    }
+    if (p.states[pool[k]]) learned++;
   }
   /* 第一个还有没学的词的单元才算「当前单元」 */
   let curUnit = 0, curLeft = 0;
@@ -212,8 +254,8 @@ function progressInfo(p) {
       if (w.unit === curUnit) curLeft++;
     }
   }
-  return { total: total, learned: learned, unit: curUnit || unit, curLeft: curLeft,
-           unitTotal: unitTotal, unitLearned: unitLearned };
+  const firstUnit = pool.length && WORDS[pool[0]] ? WORDS[pool[0]].unit : 0;
+  return { total: total, learned: learned, unit: curUnit || firstUnit, curLeft: curLeft };
 }
 
 function dueWords(p) {
@@ -222,7 +264,7 @@ function dueWords(p) {
     .map(Number)
     .filter((i) => {
       const w = WORDS[i];
-      if (!w || w.book !== p.book) return false;
+      if (!w || w.book !== p.book || !inScope(p, w)) return false;
       const st = p.states[i];
       return st.box < MASTER_BOX && st.due <= t;
     })
@@ -230,29 +272,37 @@ function dueWords(p) {
 }
 function newWords(p, n) {
   const out = [];
-  const pool = bookList(p);
+  const pool = activePool(p);
   for (let k = 0; k < pool.length && out.length < n; k++) {
     const i = pool[k];
-    const w = WORDS[i];
-    if (!w) continue;
+    if (!WORDS[i]) continue;
     if (!p.states[i]) out.push(i);
   }
   return out;
 }
-function wrongWords(p) {
+/* 只数当前范围里的词：换了单元，错词本和统计也跟着换，不然会显示别单元的词 */
+function scopeStates(p) {
   return Object.keys(p.states).map(Number)
-    .filter((i) => WORDS[i] && WORDS[i].book === p.book && (p.states[i].wrong || 0) > 0)
+    .filter((i) => WORDS[i] && WORDS[i].book === p.book && inScope(p, WORDS[i]));
+}
+function wrongWords(p) {
+  return scopeStates(p)
+    .filter((i) => (p.states[i].wrong || 0) > 0)
     .sort((a, b) => p.states[b].wrong - p.states[a].wrong);
 }
 /* 已学词里能逐字母拼的个数（闯关要出拼写题，全靠这个数） */
 function learnedSpellCount(p) {
-  return Object.keys(p.states).filter((i) => WORDS[i] && WORDS[i].book === p.book && WORDS[i].sp).length;
+  return scopeStates(p).filter((i) => WORDS[i].sp).length;
 }
 function learnedCount(p) {
-  return Object.keys(p.states).filter((i) => WORDS[i] && WORDS[i].book === p.book).length;
+  return scopeStates(p).length;
 }
 function masteredCount(p) {
-  return Object.keys(p.states).filter((i) => WORDS[i] && WORDS[i].book === p.book && p.states[i].box >= MASTER_BOX).length;
+  return scopeStates(p).filter((i) => p.states[i].box >= MASTER_BOX).length;
+}
+/* 整册口径的已学数：兄妹对比要公平，不能因为你只选了 1 个单元就比人家少 */
+function learnedBookCount(p) {
+  return Object.keys(p.states).filter((i) => WORDS[i] && WORDS[i].book === p.book).length;
 }
 function levelOf(p) {
   const lv = Math.floor(p.xp / LEVEL_STEP) + 1;
@@ -428,6 +478,7 @@ const ui = {
   spell: null,      // 拼字状态
   meaning: null,    // 三选一（看英文选中文）状态
   sheet: null,      // 弹层
+  openUnit: 0,      // 选单元页里展开看词表的那个单元
   parentOK: false   // 家长验证状态（本次会话有效）
 };
 
@@ -446,6 +497,7 @@ function tab(view) {
   ui.stack = [];
   ui.view = view;
   ui.sheet = null;
+  ui.openUnit = 0;
   render();
 }
 
@@ -576,6 +628,110 @@ function farmFoot() {
   </div>`;
 }
 
+/* ---------- 选单元：照课本单元挑要学的范围 ---------- */
+/* 语义：p.units 为空数组＝整册全学（等同旧行为），所以界面上表现为「全部选中」。
+   从「整册」状态下点掉一个单元，等于把整册展开再减掉它，符合勾选框的直觉。 */
+function unitOn(p, u) {
+  const sc = scopeUnits(p);
+  return !sc.length || sc.indexOf(u) !== -1;
+}
+function unitLearnStat(p, list) {
+  let learned = 0;
+  list.forEach(function (i) { if (p.states[i]) learned++; });
+  return { total: list.length, learned: learned, left: list.length - learned };
+}
+function setUnits(arr) {
+  const p = P();
+  const valid = (UNIT_SET[p.book] || []);
+  p.units = (arr || []).filter(function (u, k, a) {
+    return valid.indexOf(u) !== -1 && a.indexOf(u) === k;
+  }).sort(function (a, b) { return a - b; });
+  /* 六个单元全选＝没限定范围，存成空数组，这样以后课本加了新单元也自动包含 */
+  if (p.units.length === valid.length) p.units = [];
+  saveDB();
+  render();
+}
+function toggleUnit(u) {
+  const p = P();
+  const base = scopeUnits(p).length ? scopeUnits(p).slice() : (UNIT_SET[p.book] || []).slice();
+  const at = base.indexOf(u);
+  if (at === -1) base.push(u); else base.splice(at, 1);
+  setUnits(base);
+}
+
+function viewUnits() {
+  const p = P();
+  const units = bookUnits(p);
+  const sc = scopeUnits(p);
+  const onAll = !sc.length;
+  const pool = activePool(p);
+  const left = pool.filter(function (i) { return !p.states[i]; }).length;
+
+  const rows = units.map(function (u) {
+    const st = unitLearnStat(p, u.list);
+    const on = unitOn(p, u.unit);
+    const open = ui.openUnit === u.unit;
+    const pct = st.total ? Math.round((st.learned / st.total) * 100) : 0;
+    const peek = u.list.slice(0, 3).map(function (i) { return esc(WORDS[i].w); }).join(' · ');
+    return `
+    <div class="unitcard ${on ? 'is-on' : ''}">
+      <button class="unitcard__head" data-act="unitToggle" data-u="${u.unit}">
+        <span class="unitcard__tick">${on ? ICONS.check : ''}</span>
+        <span class="unitcard__body">
+          <b>Unit ${u.unit}</b>
+          <em>${peek}${u.list.length > 3 ? ' …' : ''}</em>
+        </span>
+        <span class="unitcard__num">${st.learned}<i>/${st.total}</i></span>
+      </button>
+      <span class="unitcard__bar"><i style="width:${pct}%"></i></span>
+      <button class="unitcard__more" data-act="unitWords" data-u="${u.unit}">
+        ${open ? '收起词表' : '看这 ' + st.total + ' 个词'}${open ? '' : ' ▾'}
+      </button>
+      ${open ? `<div class="wordlist unitcard__words">
+        ${u.list.map(function (i) {
+          const w = WORDS[i];
+          const got = !!p.states[i];
+          return `<div class="wordrow ${got ? 'is-got' : ''}">
+            <span class="wordrow__body">
+              <span class="wordrow__w">${esc(w.w)}${isPhrase(w) ? '<i class="wordrow__tag">词组</i>' : ''}</span>
+              <span class="wordrow__cn">${esc(w.cn)}${w.p ? ' · ' + esc(w.p) : ''}</span>
+            </span>
+            ${got ? `<span class="badge badge--ok">已学</span>` : ''}
+            <button class="btn btn--sm" data-act="say" data-w="${i}" aria-label="听发音">${ICONS.speak}</button>
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+    </div>`;
+  }).join('');
+
+  return `
+  ${topbar('选择单元', bookLabel(p), true)}
+  <main class="page">
+    <section class="panel">
+      <div class="panel__head">${spr(TILE.chalk, 16)} 学哪几个单元</div>
+      <p class="panel__hint">只学勾上的单元，别的先放着。一个都不勾＝整册全学。</p>
+      <div class="unitsum">
+        <b>${onAll ? '整册 ' + units.length + ' 个单元' : '已选 ' + sc.length + ' 个单元'}</b>
+        <em>共 ${pool.length} 个词 · 还没学 ${left} 个</em>
+      </div>
+      <div class="unitquick">
+        <button class="btn btn--sm" data-act="unitAll">整册全学</button>
+        <button class="btn btn--sm" data-act="unitUnlearned">只留没学完的</button>
+      </div>
+    </section>
+
+    <div class="sign">
+      <span class="sign__ico">${spr(TILE.frame, 16)}</span><b>${bookLabel(p)}</b><em>${units.length} 个单元</em>
+    </div>
+    <div class="unitlist">${rows}</div>
+
+    <button class="btn btn--primary btn--block btn--big" style="margin-top:14px" data-act="unitGo">
+      ${left > 0 ? '就从这里学 · 还有 ' + left + ' 个新词' : '这些词都学完了，换几个单元吧'}
+    </button>
+    ${farmFoot()}
+  </main>`;
+}
+
 /* ---------- 今日：农场全景 ---------- */
 function viewToday() {
   touchDay();
@@ -600,8 +756,7 @@ function viewToday() {
     meta: freshLeft > 0 ? `Unit ${prog.unit} · 还有 ${freshLeft} 个新词` : '今天的新词种完了',
     done: freshLeft === 0,
     go: freshLeft > 0 ? '去种 →' : '已完成'
-  });
-  tasks.push({
+  });  tasks.push({
     id: 'review', tile: TILE.tomato,
     name: '浇水复习',
     meta: plan.due.length > 0 ? `${plan.due.length} 个词到期待复习` : '暂时没有要复习的词',
@@ -631,7 +786,7 @@ function viewToday() {
       <div class="hero__card">
         <div class="hero__date">${todayStr()}${p.streak > 0 ? ' · 连续 ' + p.streak + ' 天' : ' · 今天开张'}</div>
         <h1 class="hero__title">${allDone ? '今天的农活全干完啦！' : '今天要照料 ' + (freshLeft + plan.due.length) + ' 个词'}</h1>
-        <p class="hero__desc">Lv.${lv.lv} · ${bookLabel(p)}${prog.unit ? ' Unit ' + prog.unit : ''} · 本册已学 ${prog.learned}/${prog.total}</p>
+        <p class="hero__desc">Lv.${lv.lv} · ${bookLabel(p)}${prog.unit ? ' Unit ' + prog.unit : ''} · ${scopeUnits(p).length ? '所选单元' : '本册'}已学 ${prog.learned}/${prog.total}</p>
         <div class="hero__bar"><i style="width:${pct}%"></i></div>
       </div>
     </section>
@@ -652,6 +807,24 @@ function viewToday() {
           <span class="plot__go">${t.go}</span>
         </button>`).join('')}
     </div>
+
+    ${(() => {
+      const sc = scopeUnits(p);
+      const all = bookUnits(p);
+      const pool = activePool(p);
+      const leftInScope = pool.filter((i) => !p.states[i]).length;
+      const chips = (sc.length ? all.filter((u) => sc.indexOf(u.unit) !== -1) : all)
+        .map((u) => `<span class="unitchip">U${u.unit}</span>`).join('');
+      return `<button class="unitstrip" data-act="openUnits">
+        <span class="unitstrip__ico">${spr(TILE.frame, 24)}</span>
+        <span class="unitstrip__body">
+          <b>学哪几个单元</b>
+          <em>${scopeLabel(p)} · ${pool.length} 词${leftInScope ? '，还有 ' + leftInScope + ' 个没学' : ''}</em>
+        </span>
+        <span class="unitstrip__chips">${chips}</span>
+        <span class="unitstrip__go">改 →</span>
+      </button>`;
+    })()}
 
     <div class="harvest">
       <div class="harvest__item"><span class="harvest__ico">${ICONS.coin}</span><b>${p.coins}</b><em>金币</em></div>
@@ -674,7 +847,7 @@ function viewToday() {
         <span class="vspeek__vs">VS</span>
         <span class="vspeek__av">${spr(avatarOf(o), 32)}</span>
         <span class="vspeek__body">
-          <b>${esc(o.name)}　${o.coins} 金币 · 已学 ${learnedCount(o)} 词</b>
+          <b>${esc(o.name)}　${o.coins} 金币 · 已学 ${learnedBookCount(o)} 词</b>
           <em>今天背了 ${todayDone(o).newN} 个 · 连续 ${o.streak} 天</em>
         </span>
         <span class="vspeek__go">比一比 →</span>
@@ -1333,8 +1506,7 @@ function practiceWrong() {
 /* ---------- 闯关 ---------- */
 function startGame() {
   const p = P();
-  const pool = Object.keys(p.states).map(Number)
-    .filter((i) => WORDS[i] && WORDS[i].book === p.book);
+  const pool = scopeStates(p);
   const spellPool = pool.filter((i) => WORDS[i].sp);
   if (pool.length < 4 || spellPool.length < 2) { toast('先学会 4 个词再来闯关'); return; }
 
@@ -1648,8 +1820,10 @@ function viewVersus() {
 function viewMe() {
   const p = P();
   const lv = levelOf(p);
-  const learned = learnedCount(p);
-  const pct = Math.round((learned / WORDS.length) * 100);
+  const bookTotal = bookList(p).length;
+  const learnedBook = learnedBookCount(p);      // 整册口径：成长记录看总量，不受单元筛选影响
+  const learned = learnedCount(p);              // 当前选中范围口径
+  const pct = bookTotal ? Math.round((learnedBook / bookTotal) * 100) : 0;
   const who = avatarOf(p);
 
   return `
@@ -1667,33 +1841,40 @@ function viewMe() {
       <div class="hero__card">
         <div class="hero__date">Lv.${lv.lv} · ${lv.cur}/${lv.need} 经验</div>
         <h1 class="hero__title">${esc(p.name)}的农场</h1>
-        <p class="hero__desc">已学 ${learned} 词 · 掌握 ${masteredCount(p)} 词</p>
+        <p class="hero__desc">${bookLabel(p)}已学 ${learnedBook} 词 · 掌握 ${masteredCount(p)} 词</p>
         <div class="hero__bar"><i style="width:${Math.min(100, Math.round((lv.cur / lv.need) * 100))}%"></i></div>
       </div>
     </section>
 
     <div class="statgrid">
-      <div class="stat"><b>${learned}</b><span>已学</span></div>
+      <div class="stat"><b>${learnedBook}</b><span>本册已学</span></div>
       <div class="stat"><b>${masteredCount(p)}</b><span>已掌握</span></div>
       <div class="stat"><b>${p.streak}</b><span>连续天数</span></div>
     </div>
 
     <div class="sign">
-      <span class="sign__ico">${spr(TILE.frame, 16)}</span><b>成长记录</b><em>总进度 ${pct}%</em>
+      <span class="sign__ico">${spr(TILE.frame, 16)}</span><b>成长记录</b><em>${bookLabel(p)} 进度 ${pct}%</em>
     </div>
     <div class="panel">
       <div class="fieldbar" style="margin-bottom:10px">
         <span>${spr(TILE.sprout, 16)}</span>
         <span class="progressline"><i style="width:${pct}%"></i></span>
-        <b>${learned} / ${WORDS.length}</b>
+        <b>${learnedBook} / ${bookTotal}</b>
       </div>
       <div class="wordlist">
         <div class="wordrow">
           <span class="wordrow__body">
-            <span class="wordrow__w">词库总量</span>
-            <span class="wordrow__cn">按自然拼读难度分 L1–L8</span>
+            <span class="wordrow__w">学习范围</span>
+            <span class="wordrow__cn">${scopeLabel(p)} · 范围内已学 ${learned}/${activePool(p).length}</span>
           </span>
-          <span class="badge badge--soft">${WORDS.length} 词</span>
+          <button class="btn btn--sm" data-act="openUnits">改</button>
+        </div>
+        <div class="wordrow">
+          <span class="wordrow__body">
+            <span class="wordrow__w">本册词量</span>
+            <span class="wordrow__cn">按课本词表整理，按拼读难度分 L1–L8</span>
+          </span>
+          <span class="badge badge--soft">${bookTotal} 词</span>
         </div>
         <div class="wordrow">
           <span class="wordrow__body">
@@ -1876,7 +2057,8 @@ function viewParent() {
           <button class="btn btn--sm" data-act="savePerDay" style="flex:0 0 90px">保存</button>
         </div>
       </div>
-      <p class="card__hint">当前：每天 ${db.cfg.perDay} 个新词。词库共 ${WORDS.length} 个词，按此速度约 ${Math.ceil(WORDS.length / db.cfg.perDay)} 天走完。</p>
+      <p class="card__hint">当前：每天 ${db.cfg.perDay} 个新词。${esc(p.name)}在学${bookLabel(p)}（${bookList(p).length} 个词），按此速度约 ${Math.ceil(bookList(p).length / db.cfg.perDay)} 天走完。</p>
+      <button class="btn btn--block btn--sm" style="margin-top:9px" data-act="openUnits">选择要学的单元</button>
     </div>
 
     <div class="card">
@@ -1893,9 +2075,14 @@ function viewParent() {
           <div class="avatar-pick">
             ${AVATARS.map((t) => `<button class="avatarbtn ${avatarOf(pf) === t ? 'is-on' : ''}" data-act="pickAvatar" data-k="${k}" data-t="${t}" aria-label="选这个头像">${spr(t, 32)}</button>`).join('')}
           </div>
+          <div class="bookpick">
+            <span class="bookpick__label">在学的册次</span>
+            ${BOOK_KEYS.map((bk) => `<button class="btn btn--sm ${pf.book === bk ? 'btn--primary' : ''}"
+              data-act="pickBook" data-k="${k}" data-b="${bk}">${BOOK_INFO[bk].short}</button>`).join('')}
+          </div>
         </div>`;
       }).join('')}
-      <p class="card__hint">两个孩子各自记金币和学习进度，互不影响。在「对决」页可以互相看到对方的成绩。</p>
+      <p class="card__hint">两个孩子各自记金币和学习进度，互不影响。在「对决」页可以互相看到对方的成绩。换册次不会丢进度，学过的词都还在，单元选择会按新册重新来。</p>
     </div>
 
     <div class="card">
@@ -2021,7 +2208,7 @@ function viewSheet() {
 
 /* ---------- 主渲染 ---------- */
 const VIEWS = {
-  today: viewToday, learn: viewLearn, review: viewReview, wrong: viewWrong,
+  today: viewToday, units: viewUnits, learn: viewLearn, review: viewReview, wrong: viewWrong,
   game: viewGame, versus: viewVersus, shop: viewShop, me: viewMe,
   parentGate: viewParentGate, parent: viewParent
 };
@@ -2334,6 +2521,33 @@ document.addEventListener('click', (e) => {
     case 'openWrong': go('wrong'); break;
     case 'practiceWrong': practiceWrong(); break;
 
+    /* 单元选择 */
+    case 'openUnits': ui.openUnit = 0; go('units'); break;
+    case 'unitToggle': toggleUnit(Number(t.dataset.u)); break;
+    case 'unitWords':
+      ui.openUnit = (ui.openUnit === Number(t.dataset.u)) ? 0 : Number(t.dataset.u);
+      render();
+      break;
+    case 'unitAll': setUnits([]); break;
+    case 'unitUnlearned': {
+      const p = P();
+      const left = bookUnits(p).filter(function (u) {
+        return unitLearnStat(p, u.list).left > 0;
+      }).map(function (u) { return u.unit; });
+      /* 全都学完了就别动设置，否则会被当成「整册」反而改了范围 */
+      if (!left.length) { toast('每个单元都学完了，去复习吧'); return; }
+      setUnits(left);
+      break;
+    }
+    case 'unitGo': {
+      const p = P();
+      const left = activePool(p).filter(function (i) { return !p.states[i]; });
+      if (!left.length) { toast('选的这些单元都学完了，换几个单元吧'); return; }
+      tab('today');
+      startLearn();
+      break;
+    }
+
     /* 闯关 */
     case 'startGame': { ui.game = null; startGame(); break; }
     case 'quizPick': {
@@ -2432,6 +2646,19 @@ document.addEventListener('click', (e) => {
       if (!pf) break;
       pf.tile = Number(t.dataset.t) || 108;
       saveDB();
+      render();
+      break;
+    }
+    /* 换册次：学习记录按词条索引存，换册只是换了取词池，不会丢东西；
+       但单元号是分册的，必须清空，否则会在新册里指向不存在的单元。 */
+    case 'pickBook': {
+      const pf = db.profiles[t.dataset.k];
+      const bk = t.dataset.b;
+      if (!pf || !BOOK_INFO[bk] || pf.book === bk) break;
+      pf.book = bk;
+      pf.units = [];
+      saveDB();
+      toast('已切到' + BOOK_INFO[bk].name);
       render();
       break;
     }

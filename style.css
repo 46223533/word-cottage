@@ -1314,6 +1314,176 @@ ul { margin: 0; padding: 0; list-style: none; }
   white-space: nowrap;
 }
 .badge--soft { background: var(--paper-2); color: var(--ink-2); }
+.badge--ok { background: var(--grass-l); color: var(--grass-d); }
+
+/* ==========================================================================
+   选单元
+   ========================================================================== */
+/* 今日页的范围条：一眼看到在学哪几个单元 */
+.unitstrip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  margin-top: 10px;
+  padding: 9px 11px;
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: var(--sh-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.unitstrip:active { transform: translateY(2px); box-shadow: 0 1px 0 rgba(63, 38, 49, .3); }
+.unitstrip__ico { flex: none; }
+.unitstrip__body { flex: 1; min-width: 0; }
+.unitstrip__body b { display: block; font-family: var(--f-px); font-size: 13px; color: var(--ink); }
+.unitstrip__body em {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.unitstrip__chips { display: flex; flex-wrap: wrap; gap: 3px; max-width: 96px; justify-content: flex-end; }
+.unitchip {
+  padding: 1px 5px;
+  background: var(--grass-l);
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  font-family: var(--f-px);
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--grass-d);
+}
+.unitstrip__go {
+  flex: none;
+  font-family: var(--f-px);
+  font-size: 12px;
+  font-weight: 800;
+  color: var(--soil-d);
+}
+
+/* 选单元页顶部汇总 */
+.unitsum {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 8px 10px;
+  background: var(--paper-l);
+  border: 2px solid var(--ink);
+  border-radius: 8px;
+}
+.unitsum b { font-family: var(--f-px); font-size: 14px; color: var(--ink); }
+.unitsum em { font-size: 12px; font-style: normal; font-weight: 700; color: var(--ink-2); }
+.unitquick { display: flex; gap: 8px; margin-top: 9px; }
+.unitquick .btn { flex: 1; }
+
+.unitlist { display: grid; gap: 10px; margin-top: 10px; }
+.unitcard {
+  background: var(--paper-l);
+  border: var(--bd) solid var(--ink);
+  border-radius: 10px;
+  box-shadow: var(--sh-sm);
+  overflow: hidden;
+  opacity: .72;
+  transition: opacity .12s;
+}
+.unitcard.is-on { opacity: 1; background: #fbffe9; }
+.unitcard:not(.is-on) { background: var(--paper-2); }
+.unitcard__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 11px 8px;
+  background: none;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.unitcard__tick {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  background: var(--paper-2);
+  border: var(--bd) solid var(--ink);
+  border-radius: 6px;
+  box-shadow: inset 0 -2px 0 rgba(63, 38, 49, .18);
+}
+.unitcard.is-on .unitcard__tick { background: var(--grass); }
+.unitcard.is-on .unitcard__tick .pi { width: 16px; height: 16px; }
+/* 勾的描边写死在 SVG 属性里，这里用 CSS 盖掉，绿底上的深绿勾才看得清 */
+.unitcard.is-on .unitcard__tick .pi polyline { stroke: #1f3a1e; }
+.unitcard__body { flex: 1; min-width: 0; }
+.unitcard__body b { display: block; font-family: var(--f-px); font-size: 15px; color: var(--ink); }
+.unitcard__body em {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 700;
+  color: var(--ink-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.unitcard__num {
+  flex: none;
+  font-family: var(--f-px);
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--grass-d);
+}
+.unitcard__num i { font-style: normal; font-size: 12px; color: var(--ink-2); }
+.unitcard__bar {
+  display: block;
+  height: 7px;
+  margin: 0 11px;
+  background: rgba(63, 38, 49, .14);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.unitcard__bar i { display: block; height: 100%; background: var(--grass); border-radius: 4px; }
+.unitcard__more {
+  display: block;
+  width: 100%;
+  padding: 7px 11px 9px;
+  background: none;
+  border: 0;
+  text-align: left;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--soil-d);
+  cursor: pointer;
+}
+.unitcard__words { padding: 0 9px 10px; }
+.unitcard__words .wordrow { background: #fffdf4; }
+.wordrow.is-got { opacity: .68; }
+.wordrow__tag {
+  margin-left: 5px;
+  padding: 0 4px;
+  background: var(--paper-2);
+  border-radius: 3px;
+  font-family: var(--f-ui);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  color: var(--ink-2);
+  vertical-align: 3px;
+}
+
+/* 家长中心：换册次 */
+.bookpick { display: flex; align-items: center; gap: 7px; margin-top: 8px; }
+.bookpick__label { font-size: 11px; font-weight: 800; color: var(--ink-2); flex: none; }
+.bookpick .btn { flex: 1; }
 
 /* ==========================================================================
    表单 / 弹层
